@@ -2,6 +2,16 @@
 
 jobs:
 
+- job: PEP8
+  steps:
+    - script: |
+        python3 -m pip install flake8
+        chmod +x ./dev/linter.sh
+        ./dev/linter.sh
+      displayName: 'Checking PEP8 style'
+  pool:
+    vmImage: 'ubuntu-latest'
+
 - job: Linux
   
   strategy:
@@ -19,8 +29,8 @@ jobs:
     vmImage: 'ubuntu-latest'
   
   steps:
-    - template: azure-install.yml
-    - template: azure-test.yml
+    - template: azure-test-helpers/azure-install.yml
+    - template: azure-test-helpers/azure-test.yml
 
 - job: macOS
   
@@ -35,8 +45,8 @@ jobs:
     vmImage: 'macOS-latest'
   
   steps:
-    - template: azure-install.yml
-    - template: azure-test.yml
+    - template: azure-test-helpers/azure-install.yml
+    - template: azure-test-helpers/azure-test.yml
 
 
 - job: Windows
@@ -52,5 +62,5 @@ jobs:
     vmImage: 'windows-latest'
   
   steps:
-    - template: azure-install.yml
-    - template: azure-test.yml
+    - template: azure-test-helpers/azure-install.yml
+    - template: azure-test-helpers/azure-test.yml

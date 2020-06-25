@@ -100,38 +100,35 @@ class HoeffdingTreeRegressor(RegressorMixin, HoeffdingTreeClassifier):
 
     Examples
     --------
-    .. code-block:: python
-
-       # Imports
-       from skmultiflow.data import RegressionGenerator
-       from skmultiflow.trees import HoeffdingTreeRegressor
-       import numpy as np
-
-       # Setup a data stream
-       stream = RegressionGenerator(random_state=1)
-
-       # Setup the Hoeffding Tree Regressor
-       htr = HoeffdingTreeRegressor()
-
-       # Auxiliary variables to control loop and track performance
-       n_samples = 0
-       correct_cnt = 0
-       max_samples = 200
-       y_pred = np.zeros(max_samples)
-       y_true = np.zeros(max_samples)
-
-       # Run test-then-train loop for max_samples or while there is data in the stream
-       while n_samples < max_samples and stream.has_more_samples():
-           X, y = stream.next_sample()
-           y_true[n_samples] = y[0]
-           y_pred[n_samples] = htr.predict(X)[0]
-           htr.partial_fit(X, y)
-           n_samples += 1
-
-       # Display results
-       print('{} samples analyzed.'.format(n_samples))
-       print('Hoeffding Tree regressor mean absolute error: {}'.
-             format(np.mean(np.abs(y_true - y_pred))))
+    >>> # Imports
+    >>> from skmultiflow.data import RegressionGenerator
+    >>> from skmultiflow.trees import HoeffdingTreeRegressor
+    >>> import numpy as np
+    >>>
+    >>> # Setup a data stream
+    >>> stream = RegressionGenerator(random_state=1, n_samples=200)
+    >>>
+    >>> # Setup the Hoeffding Tree Regressor
+    >>> ht_reg = HoeffdingTreeRegressor()
+    >>>
+    >>> # Auxiliary variables to control loop and track performance
+    >>> n_samples = 0
+    >>> max_samples = 200
+    >>> y_pred = np.zeros(max_samples)
+    >>> y_true = np.zeros(max_samples)
+    >>>
+    >>> # Run test-then-train loop for max_samples and while there is data
+    >>> while n_samples < max_samples and stream.has_more_samples():
+    >>>     X, y = stream.next_sample()
+    >>>     y_true[n_samples] = y[0]
+    >>>     y_pred[n_samples] = ht_reg.predict(X)[0]
+    >>>     ht_reg.partial_fit(X, y)
+    >>>     n_samples += 1
+    >>>
+    >>> # Display results
+    >>> print('{} samples analyzed.'.format(n_samples))
+    >>> print('Hoeffding Tree regressor mean absolute error: {}'.
+    >>>       format(np.mean(np.abs(y_true - y_pred))))
     """
 
     _TARGET_MEAN = 'mean'
@@ -220,8 +217,7 @@ class HoeffdingTreeRegressor(RegressorMixin, HoeffdingTreeClassifier):
 
     def normalize_sample(self, X):
         """
-        Normalize the features in order to have the same influence during
-        training.
+        Normalize the features in order to have the same influence during training.
 
         Parameters
         ----------
@@ -244,6 +240,8 @@ class HoeffdingTreeRegressor(RegressorMixin, HoeffdingTreeClassifier):
                     normalized_sample.append(float(X[i] - mean) / (3 * sd))
                 else:
                     normalized_sample.append(0.0)
+            elif self._nominal_attributes is not None and i in self._nominal_attributes:
+                normalized_sample.append(X[i])  # keep nominal inputs unaltered
             else:
                 normalized_sample.append(0.0)
         if self.samples_seen > 1:
@@ -254,8 +252,8 @@ class HoeffdingTreeRegressor(RegressorMixin, HoeffdingTreeClassifier):
 
     def normalize_target_value(self, y):
         """
-        Normalize the target in order to have the same influence during the process of
-        training.
+        Normalize the target in order to have the same influence during training.
+
         Parameters
         ----------
         y: float
@@ -263,7 +261,7 @@ class HoeffdingTreeRegressor(RegressorMixin, HoeffdingTreeClassifier):
 
         Returns
         -------
-        float:
+        float
             normalized target value
         """
         if self.samples_seen > 1:
@@ -311,7 +309,7 @@ class HoeffdingTreeRegressor(RegressorMixin, HoeffdingTreeClassifier):
             leaf_node = found_node.node
             if leaf_node is None:
                 leaf_node = found_node.parent
-            if isinstance(leaf_node, ActiveLearningNodePerceptron):
+            if isinstance(leaf_node, LearningNode):
                 return leaf_node.perceptron_weight
             else:
                 return None
@@ -319,8 +317,9 @@ class HoeffdingTreeRegressor(RegressorMixin, HoeffdingTreeClassifier):
             return None
 
     def partial_fit(self, X, y, sample_weight=None):
-        """Incrementally trains the model. Train samples (instances) are composed of X attributes
-        and their corresponding targets y.
+        """Incrementally trains the model.
+
+        Train samples (instances) are composed of X attributes and their corresponding targets y.
 
         Tasks performed before training:
 
@@ -332,11 +331,9 @@ class HoeffdingTreeRegressor(RegressorMixin, HoeffdingTreeClassifier):
 
         * If the tree is empty, create a leaf node as the root.
         * If the tree is already initialized, find the corresponding leaf for the instance and
-        update the leaf node
-          statistics.
+          update the leaf node statistics.
         * If growth is allowed and the number of instances that the leaf has observed between split
-        attempts
-          exceed the grace period then attempt to split.
+          attempts exceed the grace period then attempt to split.
 
         Parameters
         ----------
@@ -381,14 +378,11 @@ class HoeffdingTreeRegressor(RegressorMixin, HoeffdingTreeClassifier):
         self.sum_of_squares += sample_weight * y * y
 
         try:
-            self.sum_of_attribute_values = np.add(self.sum_of_attribute_values,
-                                                  np.multiply(sample_weight, X))
-            self.sum_of_attribute_squares = np.add(
-                self.sum_of_attribute_squares, np.multiply(sample_weight, np.power(X, 2))
-            )
+            self.sum_of_attribute_values += sample_weight * X
+            self.sum_of_attribute_squares += sample_weight * X * X
         except ValueError:
-            self.sum_of_attribute_values = np.multiply(sample_weight, X)
-            self.sum_of_attribute_squares = np.multiply(sample_weight, np.power(X, 2))
+            self.sum_of_attribute_values = sample_weight * X
+            self.sum_of_attribute_squares = sample_weight * X * X
 
         if self._tree_root is None:
             self._tree_root = self._new_learning_node()
@@ -461,7 +455,7 @@ class HoeffdingTreeRegressor(RegressorMixin, HoeffdingTreeClassifier):
                             predictions.append(0.0)
                             continue
                         normalized_sample = self.normalize_sample(X[i])
-                        normalized_prediction = np.dot(perceptron_weights, normalized_sample)
+                        normalized_prediction = perceptron_weights.dot(normalized_sample)
                         # De-normalize prediction
                         mean = self.sum_of_values / self.samples_seen
                         sd = compute_sd(self.sum_of_squares, self.sum_of_values, self.samples_seen)
@@ -563,6 +557,12 @@ class HoeffdingTreeRegressor(RegressorMixin, HoeffdingTreeClassifier):
                     parent.set_child(parent_idx, new_split)
             # Manage memory
             self.enforce_tracker_limit()
+        elif len(best_split_suggestions) >= 2 and best_split_suggestions[-1].merit > 0 and \
+                best_split_suggestions[-2].merit > 0:
+            last_check_ratio = best_split_suggestions[-2].merit / best_split_suggestions[-1].merit
+            last_check_sdr = best_split_suggestions[-1].merit
+
+            node.manage_memory(split_criterion, last_check_ratio, last_check_sdr, hoeffding_bound)
 
     def _sort_learning_nodes(self, learning_nodes):
         """ Define strategy to sort learning nodes according to their likeliness of being split."""

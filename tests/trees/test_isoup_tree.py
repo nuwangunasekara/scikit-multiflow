@@ -1,10 +1,15 @@
 import os
+from difflib import SequenceMatcher
+
 import numpy as np
+
 from sklearn.metrics import mean_absolute_error
+
 from skmultiflow.data import RegressionGenerator
 from skmultiflow.trees import iSOUPTreeRegressor
 from skmultiflow.utils import calculate_object_size
-from difflib import SequenceMatcher
+
+import pytest
 
 
 def test_isoup_tree_mean(test_path):
@@ -140,7 +145,7 @@ def test_isoup_tree_adaptive(test_path):
 
 def test_isoup_tree_coverage():
     max_samples = 1000
-    max_size_mb = 2
+    max_size_mb = 1
 
     stream = RegressionGenerator(
         n_samples=max_samples, n_features=10, n_informative=7, n_targets=3,
@@ -158,7 +163,7 @@ def test_isoup_tree_coverage():
     X, y = stream.next_sample(max_samples)
     tree.partial_fit(X, y)
 
-    # A tree without memory management enabled reaches over 3 MB in size
+    # A tree without memory management enabled reaches almost 2 MB in size
     assert calculate_object_size(tree, 'MB') <= max_size_mb
 
     # Memory management in a tree with perceptron leaves (purposeful typo in leaf_prediction)
@@ -190,7 +195,8 @@ def test_isoup_tree_model_description():
     max_samples = 700
     X, y = stream.next_sample(max_samples)
     # Trying to predict without fitting
-    learner.predict(X[0])
+    with pytest.warns(UserWarning):
+        learner.predict(X[0])
 
     learner.partial_fit(X, y)
 
