@@ -67,7 +67,7 @@ class FileStream(Stream):
     _CLASSIFICATION = 'classification'
     _REGRESSION = 'regression'
 
-    def __init__(self, filepath, target_idx=-1, n_targets=1, cat_features=None, allow_nan=False):
+    def __init__(self, filepath, target_idx=-1, n_targets=1, cat_features=None, allow_nan=False, repeat=1):
         super().__init__()
 
         self.filepath = filepath
@@ -76,6 +76,7 @@ class FileStream(Stream):
         self.cat_features = cat_features
         self.cat_features_idx = [] if self.cat_features is None else self.cat_features
         self.allow_nan = allow_nan
+        self.repeat = repeat
 
         self.X = None
         self.y = None
@@ -185,7 +186,8 @@ class FileStream(Stream):
             check_data_consistency(raw_data, self.allow_nan)
 
             rows, cols = raw_data.shape
-            self.n_samples = rows
+            self.n_instances = rows
+            self.n_samples = self.repeat * rows
             labels = raw_data.columns.values.tolist()
 
             if (self.target_idx + self.n_targets) == cols or (
@@ -250,6 +252,10 @@ class FileStream(Stream):
             For general purposes the return can be treated as a numpy.ndarray.
 
         """
+        if self.sample_idx >= self.n_instances:
+            if self.repeat > 1 and batch_size == 1:
+                self.restart()
+                self.repeat -= 1
         self.sample_idx += batch_size
         try:
 

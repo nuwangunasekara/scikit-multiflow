@@ -4,4 +4,4 @@ The :mod:`skmultiflow.neural_networks` module includes learning methods based on
 
 from .perceptron import PerceptronMask
 
-__all__ = ["PerceptronMask","DeepNN"]
+__all__ = ["PerceptronMask", "DeepNN", "DeepNNPytorch"]
