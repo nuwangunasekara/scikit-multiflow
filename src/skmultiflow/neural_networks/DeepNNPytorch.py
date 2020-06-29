@@ -43,7 +43,8 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                  learning_rate=0.1,
                  network_layers=None,
                  class_labels=['0','1'],  # {'up':0,'down':1}
-                 input_dimensions=None):
+                 input_dimensions=None,
+                 use_cpu=True):
         initialize_network = False
         self.net = None
         self.network_config = None
@@ -88,8 +89,10 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
             self.initialize_network(network_layers)
 
         super().__init__()
-
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if use_cpu:
+            self.device = torch.device("cpu")
+        else:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(self.device)
         # self.output = None
         self.loss = None
@@ -127,8 +130,11 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
             x.unsqueeze(0)
             yy.unsqueeze(0)
             if torch.cuda.is_available():
-                x = x.to(self.device)
-                yy = yy.to(self.device)
+                if self.device.type == 'cpu':
+                    pass
+                else:
+                    x = x.to(self.device)
+                    yy = yy.to(self.device)
             else:
                 pass
 
