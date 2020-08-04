@@ -40,7 +40,7 @@ class PyNet(nn.Module):
 
 class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
     def __init__(self,
-                 learning_rate=0.1,
+                 learning_rate=0.0,
                  network_layers=None,
                  class_labels=['0','1'],  # {'up':0,'down':1}
                  input_dimensions=None,
@@ -59,6 +59,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
             self.label_to_class.update({class_labels[i]: i})
         print('class_to_label=', self.class_to_label)
         print('label_to_class=', self.label_to_class)
+        print('label_to_class=', self.learning_rate)
 
         if isinstance(network_layers, nn.Module):
             self.net = network_layers
@@ -141,10 +142,15 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
             self.optimizer.zero_grad()  # zero the gradient buffers
             # # forward propagation
             output = self.net(x)
+
             # backward propagation
-            self.loss = self.criterion(output, yy)
-            self.loss.backward()
-            self.optimizer.step()  # Does the update
+            # print(self.learning_rate)
+            # print(self.net.linear[0].weight.data)
+            if self.learning_rate > 0.0:
+                # print('here')
+                self.loss = self.criterion(output, yy)
+                self.loss.backward()
+                self.optimizer.step()  # Does the update
 
         return self
 

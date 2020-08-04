@@ -5,7 +5,7 @@ from skmultiflow.neural_networks.utils import *
 
 class DeepNN(BaseSKMObject, ClassifierMixin):
     def __init__(self,
-                 learning_rate=0.1,
+                 learning_rate=0.0,
                  network_layers=None,
                  class_labels=['0','1'],  # {'up':0,'down':1}
                  input_dimensions=None):
@@ -21,6 +21,7 @@ class DeepNN(BaseSKMObject, ClassifierMixin):
             self.label_to_class.update({class_labels[i]: i})
         print('class_to_label=', self.class_to_label)
         print('label_to_class=', self.label_to_class)
+        print(self.learning_rate)
 
         self.layer = None
         if network_layers is None:
