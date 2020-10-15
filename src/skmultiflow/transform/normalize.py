@@ -1,16 +1,14 @@
 import numpy as np
 
 from skmultiflow.transform.base_transform import StreamTransform
-# from skmultiflow.trees.nodes.active_learning_node_perceptron import compute_sd
 from skmultiflow.utils.utils import get_dimensions
 
 
-def compute_sd(square_val: float, val: float, size: float):
-    if size > 1:
-        a = square_val - ((val * val) / size)
-        if a > 0:
-            return np.sqrt(a / size)
-    return 0.0
+def compute_sd(sum_of_squares: float, sum_of_values: float, samples_seen: float):
+    variance = 0.0
+    if samples_seen > 1:
+        variance = (sum_of_squares - ((sum_of_values * sum_of_values) / samples_seen)) / samples_seen
+    return np.sqrt(variance)
 
 
 class Normalize(StreamTransform):
@@ -39,6 +37,9 @@ class Normalize(StreamTransform):
     def normalize_sample(self, X):
         normalized_sample = []
         for i in range(len(X)):
+            normalized_sample_value = 0.0
+            mean = 0.0
+            sd = 0.0
             if (self._nominal_attributes is None or (self._nominal_attributes is not None and
                                                      i not in self._nominal_attributes)) and \
                     self.samples_seen > 1:
@@ -46,11 +47,11 @@ class Normalize(StreamTransform):
                 sd = compute_sd(self.sum_of_attribute_squares[i], self.sum_of_attribute_values[i],
                                 self.samples_seen)
                 if sd > 0:
-                    normalized_sample.append(float(X[i] - mean) / (3 * sd))
-                else:
-                    normalized_sample.append(0.0)
-            else:
-                normalized_sample.append(0.0)
+                    normalized_sample_value = float(X[i] - mean) / (3 * sd)
+            # print('X[f{}]={}, v_sum={}, s_sum={}, s_seen={}, mean={}, sd={}, n_value={}'.format(
+            #     i, X[i], self.sum_of_attribute_values[i], self.sum_of_attribute_squares[i], self.samples_seen, mean, sd, normalized_sample_value))
+            normalized_sample.append(normalized_sample_value)
+
         # if self.samples_seen > 1:
         #     normalized_sample.append(1.0)  # Value to be multiplied with the constant factor
         # else:
