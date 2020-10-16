@@ -79,9 +79,9 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         for i in range(len(self.class_labels)):
             self.class_to_label.update({i: self.class_labels[i]})
             self.label_to_class.update({self.class_labels[i]: i})
-        print('class_to_label=', self.class_to_label)
-        print('label_to_class=', self.label_to_class)
-        print('label_to_class=', self.learning_rate)
+        # print('class_to_label=', self.class_to_label)
+        # print('label_to_class=', self.label_to_class)
+        # print('label_to_class=', self.learning_rate)
 
         if isinstance(self.network_layers, nn.Module):
             self.net = self.network_layers
