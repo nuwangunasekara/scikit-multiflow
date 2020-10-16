@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+default_network_layers = [{'neurons': 0, 'input_d': 0}, {'neurons': 2 ** 8, 'g': 3}, {'neurons': 1, 'g': 1}]
 
 class PyNet(nn.Module):
     def __init__(self, nn_layers=None):
@@ -40,63 +41,70 @@ class PyNet(nn.Module):
 
 class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
     def __init__(self,
-                 learning_rate=0.0,
-                 network_layers=None,
+                 learning_rate=0.03,
+                 network_layers=default_network_layers,
                  class_labels=['0','1'],  # {'up':0,'down':1}
-                 input_dimensions=None,
                  use_cpu=True):
-        initialize_network = False
-        self.net = None
-        self.network_config = None
+        # configuration variables (which has the same name as init parameters)
         self.learning_rate = learning_rate
+        self.network_layers = network_layers
+        self.class_labels = class_labels
+        self.use_cpu = use_cpu
+
+        # status variables
+        self.net = None
         self.optimizer = None
         self.criterion = None
-
+        self.loss = None
+        self.device = None
         self.class_to_label = {}
         self.label_to_class = {}
-        for i in range(len(class_labels)):
-            self.class_to_label.update({i: class_labels[i]})
-            self.label_to_class.update({class_labels[i]: i})
+
+        self.init_values()
+
+        super().__init__()
+
+    def init_values(self):
+        # init status variables
+        self.net = None
+        self.optimizer = None
+        self.criterion = None
+        self.loss = None
+        self.device = None
+        self.class_to_label = {}
+        self.label_to_class = {}
+
+        initialize_network = False
+
+        for i in range(len(self.class_labels)):
+            self.class_to_label.update({i: self.class_labels[i]})
+            self.label_to_class.update({self.class_labels[i]: i})
         print('class_to_label=', self.class_to_label)
         print('label_to_class=', self.label_to_class)
         print('label_to_class=', self.learning_rate)
 
-        if isinstance(network_layers, nn.Module):
-            self.net = network_layers
+        if isinstance(self.network_layers, nn.Module):
+            self.net = self.network_layers
             self.initialize_net_para()
-        elif isinstance(network_layers, list):
-            if network_layers[0]['input_d'] is None or network_layers[0]['input_d'] == 0:
-                if input_dimensions is None:
-                    # wait till we receive the first instance to get input dimensions
-                    # to initialize the passed-in network
-                    pass
-                else:
-                    network_layers[0]['input_d'] = input_dimensions
-                    initialize_network = True
+        elif isinstance(self.network_layers, list):
+            if self.network_layers[0]['input_d'] is None or self.network_layers[0]['input_d'] == 0:
+                # wait till we receive the first instance to get input dimensions
+                # to initialize the passed-in network
+                self.network_layers[0]['input_d'] = 0
             else:
                 initialize_network = True
-            self.network_config = network_layers
         else:
-            # unknown network type passed in, re-init
-            if input_dimensions is None:
-                # wait till we receive the first instance to get input dimensions to initialize a basic network
-                pass
-            else:
-                network_layers = auto_configure_layers(input_dimensions=input_dimensions, return_basic=True)
-                self.network_config = network_layers
-                initialize_network = True
+            self.network_layers = default_network_layers
+            print('Unknown network type passed in, set the network type to default: {}'.format(self.network_layers))
 
         if initialize_network:
-            self.initialize_network(network_layers)
+            self.initialize_network(self.network_layers)
 
-        super().__init__()
-        if use_cpu:
+        if self.use_cpu:
             self.device = torch.device("cpu")
         else:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(self.device)
-        # self.output = None
-        self.loss = None
 
     def initialize_net_para(self):
         self.optimizer = optim.SGD(self.net.parameters(), lr=self.learning_rate)
@@ -106,6 +114,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         # combines a Sigmoid layer
         # self.criterion = nn.BCEWithLogitsLoss()
         self.criterion = nn.BCELoss()
+        print('Network configuration: \n{}'.format(self))
 
     def initialize_network(self, network_layers=None):
         self.net = PyNet(network_layers)
@@ -115,11 +124,8 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         r, c = get_dimensions(X)
 
         if self.net is None:
-            if self.network_config and len(self.network_config) > 0:
-                self.network_config[0]['input_d'] = c
-            else:
-                self.network_config = auto_configure_layers(input_dimensions=c, return_basic=True)
-            self.initialize_network(self.network_config)
+            self.network_layers[0]['input_d'] = c
+            self.initialize_network(self.network_layers)
 
         for i in range(r):
             # self.forward_prop(X[i])
@@ -164,11 +170,8 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         r, c = get_dimensions(X)
 
         if self.net is None:
-            if self.network_config and len(self.network_config) > 0:
-                self.network_config[0]['input_d'] = c
-            else:
-                self.network_config = auto_configure_layers(input_dimensions=c, return_basic=True)
-            self.initialize_network(self.network_config)
+            self.network_layers[0]['input_d'] = c
+            self.initialize_network(self.network_layers)
 
         for i in range(r):
             x = torch.from_numpy(X[i])
@@ -178,3 +181,8 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
             proba.append([1 - y_prob, y_prob])
 
         return np.asarray(proba)
+
+    def reset(self):
+        # configuration variables (which has the same name as init parameters) should be copied by the caller function
+        self.init_values()
+        return self
