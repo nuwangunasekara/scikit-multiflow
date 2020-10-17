@@ -9,6 +9,7 @@ import torch.optim as optim
 
 default_network_layers = [{'neurons': 0, 'input_d': 0}, {'neurons': 2 ** 8, 'g': 3}, {'neurons': 1, 'g': 1}]
 
+
 class PyNet(nn.Module):
     def __init__(self, nn_layers=None):
         super(PyNet, self).__init__()
@@ -44,12 +45,14 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                  learning_rate=0.03,
                  network_layers=default_network_layers,
                  class_labels=['0','1'],  # {'up':0,'down':1}
-                 use_cpu=True):
+                 use_cpu=True,
+                 process_as_a_batch=False):
         # configuration variables (which has the same name as init parameters)
         self.learning_rate = learning_rate
         self.network_layers = network_layers
         self.class_labels = class_labels
         self.use_cpu = use_cpu
+        self.process_as_a_batch = process_as_a_batch
 
         # status variables
         self.net = None
@@ -79,9 +82,6 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         for i in range(len(self.class_labels)):
             self.class_to_label.update({i: self.class_labels[i]})
             self.label_to_class.update({self.class_labels[i]: i})
-        # print('class_to_label=', self.class_to_label)
-        # print('label_to_class=', self.label_to_class)
-        # print('label_to_class=', self.learning_rate)
 
         if isinstance(self.network_layers, nn.Module):
             self.net = self.network_layers
@@ -120,43 +120,46 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         self.net = PyNet(network_layers)
         self.initialize_net_para()
 
+    def train_net(self, x, y):
+        if torch.cuda.is_available():
+            if self.device.type == 'cpu':
+                pass
+            else:
+                x = x.to(self.device)
+                y = y.to(self.device)
+        else:
+            pass
+
+        self.optimizer.zero_grad()  # zero the gradient buffers
+        # # forward propagation
+        output = self.net(x)
+
+        # backward propagation
+        # print(self.learning_rate)
+        # print(self.net.linear[0].weight.data)
+        if self.learning_rate > 0.0:
+            # print('here')
+            self.loss = self.criterion(output, y)
+            self.loss.backward()
+            self.optimizer.step()  # Does the update
+
     def partial_fit(self, X, y, classes=None, sample_weight=None):
         r, c = get_dimensions(X)
-
         if self.net is None:
             self.network_layers[0]['input_d'] = c
             self.initialize_network(self.network_layers)
 
-        for i in range(r):
-            # self.forward_prop(X[i])
-            # self.backward_prop(self.label_to_class[y[i]])
-            x = torch.from_numpy(X[i])
-            yy = torch.from_numpy(np.array(y[i]))
-            x = x.view(1, -1).float()
-            yy = yy.view(1, -1).float()
-            x.unsqueeze(0)
-            yy.unsqueeze(0)
-            if torch.cuda.is_available():
-                if self.device.type == 'cpu':
-                    pass
-                else:
-                    x = x.to(self.device)
-                    yy = yy.to(self.device)
-            else:
-                pass
-
-            self.optimizer.zero_grad()  # zero the gradient buffers
-            # # forward propagation
-            output = self.net(x)
-
-            # backward propagation
-            # print(self.learning_rate)
-            # print(self.net.linear[0].weight.data)
-            if self.learning_rate > 0.0:
-                # print('here')
-                self.loss = self.criterion(output, yy)
-                self.loss.backward()
-                self.optimizer.step()  # Does the update
+        if self.process_as_a_batch:
+            self.train_net(x=torch.from_numpy(X).float(), y=torch.from_numpy(np.array(y)).view(-1, 1).float())
+        else:  # per instance processing (default behaviour)
+            for i in range(r):
+                x = torch.from_numpy(X[i])
+                yy = torch.from_numpy(np.array(y[i]))
+                x = x.view(1, -1).float()
+                yy = yy.view(1, -1).float()
+                x.unsqueeze(0)
+                yy.unsqueeze(0)
+                self.train_net(x=x, y=yy)
 
         return self
 
@@ -166,21 +169,24 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         return vectorized_map_class_to_label(y_pred, class_to_label_map=self.class_to_label)
 
     def predict_proba(self, X):
-        proba = []
         r, c = get_dimensions(X)
 
         if self.net is None:
             self.network_layers[0]['input_d'] = c
             self.initialize_network(self.network_layers)
 
-        for i in range(r):
-            x = torch.from_numpy(X[i])
-            x = x.view(1, -1).float()
-            x.unsqueeze(0)
-            y_prob = self.net(x)
-            proba.append([1 - y_prob, y_prob])
-
-        return np.asarray(proba)
+        if self.process_as_a_batch:
+            y_prob = self.net(torch.from_numpy(X).float())
+            return torch.cat((1 - y_prob, y_prob), 1).detach().numpy()
+        else:  # per instance processing (default behaviour)
+            proba = []
+            for i in range(r):
+                x = torch.from_numpy(X[i])
+                x = x.view(1, -1).float()
+                x.unsqueeze(0)
+                y_prob = self.net(x)
+                proba.append([1 - y_prob, y_prob])
+            return np.asarray(proba)
 
     def reset(self):
         # configuration variables (which has the same name as init parameters) should be copied by the caller function
