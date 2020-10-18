@@ -104,7 +104,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
             self.device = torch.device("cpu")
         else:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(self.device)
+        # print(self.device)
 
     def initialize_net_para(self):
         self.optimizer = optim.SGD(self.net.parameters(), lr=self.learning_rate)
