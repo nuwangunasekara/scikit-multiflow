@@ -428,7 +428,7 @@ class ClassifierMixin(metaclass=ABCMeta):
         raise NotImplementedError
 
     @abstractmethod
-    def predict(self, X):
+    def predict(self, X, **kwargs):
         """ Predict classes for the passed data.
 
         Parameters

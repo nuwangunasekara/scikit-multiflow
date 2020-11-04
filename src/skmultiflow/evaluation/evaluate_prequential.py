@@ -316,7 +316,11 @@ class EvaluatePrequential(StreamEvaluator):
                         try:
                             # Testing time
                             self.running_time_measurements[i].compute_testing_time_begin()
-                            prediction[i].extend(self.model[i].predict(X))
+                            if self.model[i].__class__.__name__ == 'AutonomousNN':
+                                prediction[i].extend(self.model[i].predict(X, y))
+                            else:
+                                prediction[i].extend(self.model[i].predict(X))
+
                             self.running_time_measurements[i].compute_testing_time_end()
                         except TypeError:
                             raise TypeError("Unexpected prediction value from {}"
