@@ -522,6 +522,7 @@ class StreamingRandomPatchesBaseLearner:
             if self.drift_detection_method.detected_change():
                 self.n_drifts_detected += 1
                 # There was a change, reset the model
+                print('SRP: Drift detected around {} th sample'.format(n_samples_seen))
                 self.reset(n_features=n_features_total, n_samples_seen=n_samples_seen,
                            random_state=random_state)
 
