@@ -14,7 +14,9 @@ default_network_layers = [{'neurons': 0, 'input_d': 0}, {'neurons': 2 ** 8, 'g':
 OP_TYPE_SGD = 'SGD'
 OP_TYPE_SGD_NC = 'SGD-NC'
 OP_TYPE_ADAGRAD = 'Adagrad'
+OP_TYPE_ADAGRAD_NC = 'Adagrad-NC'
 OP_TYPE_RMSPROP = 'RMSprop'
+OP_TYPE_RMSPROP_NC = 'RMSprop-NC'
 OP_TYPE_ADADELTA = 'Adadelta'
 OP_TYPE_ADADELTA_NC = 'Adadelta-NC'
 OP_TYPE_ADAM = 'Adam'
@@ -70,8 +72,26 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         self.use_cpu = use_cpu
         self.process_as_a_batch = process_as_a_batch
         self.optimizer_type = optimizer_type
-        self.warning_detection_method = warning_detection_method
-        self.drift_detection_method = drift_detection_method
+        if self.optimizer_type == OP_TYPE_SGD_NC \
+                or self.optimizer_type == OP_TYPE_ADAGRAD_NC \
+                or self.optimizer_type == OP_TYPE_RMSPROP_NC \
+                or self.optimizer_type == OP_TYPE_ADADELTA_NC \
+                or self.optimizer_type == OP_TYPE_ADAM_NC \
+                or self.optimizer_type == OP_TYPE_ADAM_AMSG_NC:
+            self.drift_detection_method = None
+            self.warning_detection_method = None
+        else:
+            self.drift_detection_method = drift_detection_method
+            if self.drift_detection_method.__class__.__name__ == 'HDDM_A' \
+                    or self.drift_detection_method.__class__.__name__ == 'HDDM_W':
+                if warning_detection_method is not None:
+                    print('Parameter warning_detection_method should be None for drift_detection_methods HDDM_A and'
+                          ' HDDM_W as they have in built warning detection. Hence setting it to None.')
+                    self.warning_detection_method = None
+                else:
+                    self.warning_detection_method = None
+            else:
+                self.warning_detection_method = warning_detection_method
 
         # status variables
         self.net = None
@@ -130,35 +150,24 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         # print(self.device)
 
     def init_optimizer(self):
-        if self.optimizer_type == OP_TYPE_ADAGRAD:
+        if self.optimizer_type == OP_TYPE_ADAGRAD or self.optimizer_type == OP_TYPE_ADAGRAD_NC:
             self.optimizer = optim.Adagrad(self.net.parameters(), lr=self.learning_rate, lr_decay=0, weight_decay=0,
                                            initial_accumulator_value=0, eps=1e-10)
-        elif self.optimizer_type == OP_TYPE_ADADELTA:
+        elif self.optimizer_type == OP_TYPE_ADADELTA or self.optimizer_type == OP_TYPE_ADADELTA_NC:
             self.optimizer = optim.Adadelta(self.net.parameters(), lr=self.learning_rate, eps=1e-10)
-        elif self.optimizer_type == OP_TYPE_ADADELTA_NC:
-            self.optimizer = optim.Adadelta(self.net.parameters(), lr=self.learning_rate, eps=1e-10)
-        elif self.optimizer_type == OP_TYPE_RMSPROP:
+        elif self.optimizer_type == OP_TYPE_RMSPROP or self.optimizer_type == OP_TYPE_RMSPROP_NC:
             self.optimizer = optim.RMSprop(self.net.parameters(), lr=self.learning_rate, alpha=0.99, weight_decay=0,
                                            eps=1e-10)
-        elif self.optimizer_type == OP_TYPE_SGD:
+        elif self.optimizer_type == OP_TYPE_SGD or self.optimizer_type == OP_TYPE_SGD_NC:
             self.optimizer = optim.SGD(self.net.parameters(), lr=self.learning_rate)
-        elif self.optimizer_type == OP_TYPE_SGD_NC:
-            self.optimizer = optim.SGD(self.net.parameters(), lr=self.learning_rate)
-        elif self.optimizer_type == OP_TYPE_ADAM:
+        elif self.optimizer_type == OP_TYPE_ADAM or self.optimizer_type == OP_TYPE_ADAM_NC:
             self.optimizer = optim.Adam(self.net.parameters(), lr=self.learning_rate, betas=(0.9, 0.999), eps=1e-10,
                                         weight_decay=0, amsgrad=False)
-        elif self.optimizer_type == OP_TYPE_ADAM_NC:
-            self.optimizer = optim.Adam(self.net.parameters(), lr=self.learning_rate, betas=(0.9, 0.999), eps=1e-10,
-                                        weight_decay=0, amsgrad=False)
-        elif self.optimizer_type == OP_TYPE_ADAM_AMSG:
-            self.optimizer = optim.Adam(self.net.parameters(), lr=self.learning_rate, betas=(0.9, 0.999), eps=1e-10,
-                                        weight_decay=0, amsgrad=True)
-        elif self.optimizer_type == OP_TYPE_ADAM_AMSG_NC:
+        elif self.optimizer_type == OP_TYPE_ADAM_AMSG or self.optimizer_type == OP_TYPE_ADAM_AMSG_NC:
             self.optimizer = optim.Adam(self.net.parameters(), lr=self.learning_rate, betas=(0.9, 0.999), eps=1e-10,
                                         weight_decay=0, amsgrad=True)
         else:
             print('Invalid optimizer type = {}'.format(self.optimizer_type))
-        print('Init optimizer initialized.{}'.format(self.optimizer))
 
     def initialize_net_para(self):
         self.init_optimizer()
@@ -198,30 +207,31 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
             self.loss.backward()
             self.optimizer.step()  # Does the update
 
-        # get predicted class and compare with actual class label
-        labels_proba = torch.cat((1 - output, output), 1)
-        predicted_label = torch.argmax(labels_proba, dim=1)
-        predicted_matches_actual = predicted_label == y
-        self.warning_detection_method.add_element(1 if predicted_matches_actual else 0)
-        self.drift_detection_method.add_element(1 if predicted_matches_actual else 0)
+        if self.drift_detection_method is not None:
+            # get predicted class and compare with actual class label
+            labels_proba = torch.cat((1 - output, output), 1)
+            predicted_label = torch.argmax(labels_proba, dim=1)
+            predicted_matches_actual = predicted_label == y
+            self.drift_detection_method.add_element(1 if predicted_matches_actual else 0)
+            if self.warning_detection_method is not None:
+                self.warning_detection_method.add_element(1 if predicted_matches_actual else 0)
 
-        # pass the difference to the detector
-        # predicted_matches_actual = torch.abs(y-output).detach().numpy()[0]
-        # self.drift_detection_method.add_element(predicted_matches_actual)
+            # pass the difference to the detector
+            # predicted_matches_actual = torch.abs(y-output).detach().numpy()[0]
+            # self.drift_detection_method.add_element(predicted_matches_actual)
 
-        # Check if the was a warning
-        if self.warning_detection_method.detected_change():
-            self.detected_warnings += 1
-
-        # Check if the was a change
-        if self.detected_warnings > 3 and self.drift_detection_method.detected_change():
-            print('Drift detected around {} th sample'.format(self.samples_seen))
-            self.detected_warnings = 0
-            if self.optimizer_type == OP_TYPE_SGD_NC or self.optimizer_type == OP_TYPE_ADADELTA_NC \
-                    or self.optimizer_type == OP_TYPE_ADAM_NC or self.optimizer_type == OP_TYPE_ADAM_AMSG_NC:
-                pass
-            else:
-                print('Reset optimizer')
+            # Check if the was a warning
+            if self.warning_detection_method is not None:
+                if self.warning_detection_method.detected_change():
+                    self.detected_warnings += 1
+            else:  # warning detector is None, hence drift detector has warning detection capability.
+                if self.drift_detection_method.detected_warning_zone():
+                    self.detected_warnings += 1  # 3 is the threshold level
+            # Check if the was a change
+            if self.detected_warnings > 3 and self.drift_detection_method.detected_change():
+                print('Drift detected by {} around {} th sample. Hence resetting optimizer'.format(
+                    self.drift_detection_method.__class__.__name__, self.samples_seen))
+                self.detected_warnings = 0
                 self.init_optimizer()
 
     def partial_fit(self, X, y, classes=None, sample_weight=None):
