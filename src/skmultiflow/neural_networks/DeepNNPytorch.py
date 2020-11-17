@@ -67,7 +67,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                  drift_detection_method: BaseDriftDetector = ADWIN(delta=1e-3)):
         # configuration variables (which has the same name as init parameters)
         self.learning_rate = learning_rate
-        self.network_layers = network_layers
+        self.network_layers = copy.deepcopy(network_layers)
         self.class_labels = class_labels
         self.use_cpu = use_cpu
         self.process_as_a_batch = process_as_a_batch
@@ -137,7 +137,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
             else:
                 initialize_network = True
         else:
-            self.network_layers = default_network_layers
+            self.network_layers = copy.deepcopy(default_network_layers)
             print('Unknown network type passed in, set the network type to default: {}'.format(self.network_layers))
 
         if initialize_network:
