@@ -230,7 +230,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
             # Check if the was a change
             if self.detected_warnings > 3 and self.drift_detection_method.detected_change():
                 print('Drift detected by {} around {} th sample. Hence resetting optimizer'.format(
-                    self.drift_detection_method.__class__.__name__, self.samples_seen))
+                    self.drift_detection_method, self.samples_seen))
                 self.detected_warnings = 0
                 self.init_optimizer()
 
