@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-default_network_layers = [{'neurons': 0, 'input_d': 0}, {'neurons': 2 ** 8, 'g': 3}, {'neurons': 1, 'g': 1}]
+default_network_layers = [{'neurons': 0, 'input_d': 0}, {'neurons': 2 ** 10, 'g': 3}, {'neurons': 1, 'g': 1}]
 
 OP_TYPE_SGD = 'SGD'
 OP_TYPE_SGD_NC = 'SGD-NC'
