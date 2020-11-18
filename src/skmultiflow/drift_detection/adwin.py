@@ -53,15 +53,22 @@ class ADWIN(BaseDriftDetector):
     """
     MAX_BUCKETS = 5
 
-    def __init__(self, delta=.002):
+    DETECT_UP = 1
+    DETECT_DOWN = 2
+    DETECT_BOTH = 3
+
+    def __init__(self, delta=.002, direction=DETECT_BOTH):
         super().__init__()
         # default values affected by init_bucket()
         self.delta = delta
+        # print('direction=', direction)
+        self.direction = direction
         self.last_bucket_row = 0
         self.list_row_bucket = None
         self._total = 0
         self._variance = 0
         self._width = 0
+        self._old_mean = 0
         self.bucket_number = 0
 
         self.__init_buckets()
@@ -187,6 +194,13 @@ class ADWIN(BaseDriftDetector):
          
         """
         self._width += 1
+
+        # old_sd compute_sd(sum_of_squares: float, sum_of_values: float, samples_seen: float):
+        if self._width > 0:
+            self._old_mean = self._total / self._width
+        else:
+            self._old_mean = 0.0
+
         self.__insert_element_bucket(0, value, self.list_row_bucket.first)
         incremental_variance = 0
 
@@ -339,7 +353,16 @@ class ADWIN(BaseDriftDetector):
                                 self.detect_twice = self.mint_time
 
                             bln_reduce_width = True
-                            bln_change = True
+
+                            if self.direction == self.DETECT_DOWN:
+                                if self._old_mean > (self._total / self._width):  # mean going down
+                                    bln_change = True
+                            elif self.direction == self.DETECT_UP:
+                                if self._old_mean < (self._total / self._width):  # mean going up
+                                    bln_change = True
+                            else:  # mean going up/down
+                                bln_change = True
+
                             if self.width > 0:
                                 n0 -= self.delete_element()
                                 bln_exit = True
