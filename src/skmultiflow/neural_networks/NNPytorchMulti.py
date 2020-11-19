@@ -65,8 +65,8 @@ class ANN:
                  use_cpu=True,
                  process_as_a_batch=False,
                  optimizer_type=OP_TYPE_SGD,
-                 warning_detection_method: BaseDriftDetector = ADWIN(delta=1e-8),
-                 drift_detection_method: BaseDriftDetector = ADWIN(delta=1e-3)):
+                 warning_detection_method: BaseDriftDetector = ADWIN(delta=1e-8, direction=ADWIN.DETECT_DOWN),
+                 drift_detection_method: BaseDriftDetector = ADWIN(delta=1e-3, direction=ADWIN.DETECT_DOWN)):
         # configuration variables (which has the same name as init parameters)
         self.learning_rate = learning_rate
         self.network_layers = copy.deepcopy(network_layers)
@@ -178,7 +178,9 @@ class ANN:
         # combines a Sigmoid layer
         # self.criterion = nn.BCEWithLogitsLoss()
         self.criterion = nn.BCELoss()
-        print('Network configuration: \n{}'.format(self))
+        print('Network configuration:\n'
+              '{}\n'
+              '======================================='.format(self))
 
     def initialize_network(self, network_layers=None):
         self.net = PyNet(network_layers)
@@ -280,6 +282,9 @@ class ANN:
         # configuration variables (which has the same name as init parameters) should be copied by the caller function
         self.init_values()
         return self
+
+    def __str__(self):
+        return str(self.__class__) + ": " + str(self.__dict__)
 
 
 def net_train(net: ANN, X: np.ndarray, r, c, y: np.ndarray):
