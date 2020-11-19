@@ -359,8 +359,8 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         y_proba = self.predict_proba(X)
         pred_sum_per_class = np.sum(y_proba, axis=0)
         pred_avgsum_per_class = np.divide(pred_sum_per_class, len(self.nets))
-        [y_pred] = np.argmax(pred_avgsum_per_class, axis=0)
-        return vectorized_map_class_to_label(y_pred, class_to_label_map=self.class_to_label)
+        y_pred = np.argmax(pred_avgsum_per_class, axis=0)
+        return vectorized_map_class_to_label([y_pred], class_to_label_map=self.class_to_label)
 
     def predict_proba(self, X):
         r, c = get_dimensions(X)
