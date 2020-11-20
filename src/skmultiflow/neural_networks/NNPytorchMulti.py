@@ -370,19 +370,19 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
     def predict_proba(self, X):
         r, c = get_dimensions(X)
         proba = np.zeros([len(self.nets), 2])
-        if self.use_threads:
-            t = []
-            for i in range(len(self.nets)):
-                t.append(threading.Thread(target=net_predict_proba, args=(self.nets[i], X, r, c, proba, i,)))
-
-            for i in range(len(self.nets)):
-                t[i].start()
-
-            for i in range(len(self.nets)):
-                t[i].join()
-        else:
-            for i in range(len(self.nets)):
-                net_predict_proba(self.nets[i], X, r, c, proba, i)
+        # if self.use_threads:
+        #     t = []
+        #     for i in range(len(self.nets)):
+        #         t.append(threading.Thread(target=net_predict_proba, args=(self.nets[i], X, r, c, proba, i,)))
+        #
+        #     for i in range(len(self.nets)):
+        #         t[i].start()
+        #
+        #     for i in range(len(self.nets)):
+        #         t[i].join()
+        # else:
+        for i in range(len(self.nets)):
+            net_predict_proba(self.nets[i], X, r, c, proba, i)
         return np.asarray(proba)
 
     def reset(self):
