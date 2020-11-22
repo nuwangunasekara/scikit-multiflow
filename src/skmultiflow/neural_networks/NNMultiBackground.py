@@ -106,7 +106,8 @@ class ANN:
         self.samples_seen = 0
         self.detected_warnings = 0
         self.accumulated_loss = 0
-        self.accumulated_loss_since_last_drift_detected_by_parent = 0
+        self.accumulated_loss_since_last_detected_drift_by_parent = 0
+        self.samples_seen_after_last_detected_drift_by_parent = 0
         self.last_detected_drift_by_parent_at = 0
 
         self.init_values()
@@ -123,7 +124,8 @@ class ANN:
         self.samples_seen = 0
         self.detected_warnings = 0
         self.accumulated_loss = 0
-        self.accumulated_loss_since_last_drift_detected_by_parent = 0
+        self.accumulated_loss_since_last_detected_drift_by_parent = 0
+        self.samples_seen_after_last_detected_drift_by_parent = 0
         self.last_detected_drift_by_parent_at = 0
 
         initialize_network = False
@@ -214,7 +216,7 @@ class ANN:
             self.loss.backward()
             self.optimizer.step()  # Does the update
             self.accumulated_loss += self.loss.item()
-            self.accumulated_loss_since_last_drift_detected_by_parent += self.loss.item()
+            self.accumulated_loss_since_last_detected_drift_by_parent += self.loss.item()
 
         labels_proba = torch.cat((1 - output, output), 1).detach()
         # TODO: we may have to have a special case for batch processing
@@ -249,7 +251,7 @@ class ANN:
 
     def partial_fit(self, X, r, c, y, last_detected_drift_by_parent_at):
         if self.last_detected_drift_by_parent_at < last_detected_drift_by_parent_at:
-            self.accumulated_loss_since_last_drift_detected_by_parent = 0
+            self.accumulated_loss_since_last_detected_drift_by_parent = 0
             self.last_detected_drift_by_parent_at = last_detected_drift_by_parent_at
         if self.net is None:
             self.network_layers[0]['input_d'] = c
@@ -257,9 +259,10 @@ class ANN:
 
         if self.process_as_a_batch:
             self.samples_seen += r
+            self.samples_seen_after_last_detected_drift_by_parent += r
             # probas, y_hats are still tensors
             probas, y_hats = self.train_net(x=torch.from_numpy(X).float(), y=torch.from_numpy(np.array(y)).view(-1, 1).float())
-            return probas.numpy(), y_hats.numpy(), self.accumulated_loss_since_last_drift_detected_by_parent
+            return probas.numpy(), y_hats.numpy(), self.accumulated_loss_since_last_detected_drift_by_parent/self.samples_seen_after_last_detected_drift_by_parent
         else:  # per instance processing (default behaviour)
             probas = None
             y_hats = None
@@ -271,6 +274,7 @@ class ANN:
                 x.unsqueeze(0)
                 yy.unsqueeze(0)
                 self.samples_seen += 1
+                self.samples_seen_after_last_detected_drift_by_parent += 1
                 proba, y_hat = self.train_net(x=x, y=yy)
                 if i == 0:
                     probas = proba.detach().clone()
@@ -278,7 +282,7 @@ class ANN:
                 else:
                     torch.cat(probas, proba, dim=0, out=probas)
                     torch.cat(y_hats, y_hat, dim=0, out=y_hats)
-            return probas.numpy(), y_hats.numpy(), self.accumulated_loss_since_last_drift_detected_by_parent
+            return probas.numpy(), y_hats.numpy(), self.accumulated_loss_since_last_detected_drift_by_parent/self.samples_seen_after_last_detected_drift_by_parent
 
     def predict_proba(self, X, r, c):
         # r, c = get_dimensions(X)
@@ -310,7 +314,7 @@ class ANN:
 
 
 def net_train(net: ANN, X: np.ndarray, r, c, y: np.ndarray, train_results, i, last_detected_drift_by_parent_at):
-    train_results['probas'][i], train_results['y_hats'][i], train_results['accumulated_loss_since_last_drift_detected_by_parent'][i] = net.partial_fit(X, r, c, y, last_detected_drift_by_parent_at)
+    train_results['probas'][i], train_results['y_hats'][i], train_results['avg_loss_since_last_detected_drift_by_parent'][i] = net.partial_fit(X, r, c, y, last_detected_drift_by_parent_at)
 
 
 def net_predict_proba(net: ANN, X: np.ndarray, r, c, probas, i):
@@ -338,10 +342,12 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                  class_labels=['0','1'],  # {'up':0,'down':1}
                  use_cpu=True,
                  process_as_a_batch=False,
-                 use_threads=False):
+                 use_threads=False,
+                 background_training_after=4):
         # configuration variables (which has the same name as init parameters)
         self.class_labels = class_labels
         self.use_threads = use_threads
+        self.background_training_after = background_training_after
 
         super().__init__()
 
@@ -391,40 +397,41 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
 
         # if self.samples_seen % 2 == 0:
         if len(self.background_learner_threads) == 0:
-            self.background_train_results = {'probas': [None] * len(self.background_nets),
-                                             'y_hats': [None] * len(self.background_nets),
-                                             'accumulated_loss_since_last_drift_detected_by_parent': [0] * len(
-                                                 self.background_nets)}
-            for i in range(len(self.background_nets)):
-                self.background_learner_threads.append(threading.Thread(target=net_train,
-                                                                        args=(self.background_nets[i], X, r, c, y, self.background_train_results, i, self.last_detected_drift_around,)))
+            if self.samples_seen % self.background_training_after == 0:
+                self.background_train_results = {'probas': [None] * len(self.background_nets),
+                                                 'y_hats': [None] * len(self.background_nets),
+                                                 'avg_loss_since_last_detected_drift_by_parent': [0] * len(
+                                                     self.background_nets)}
+                for i in range(len(self.background_nets)):
+                    self.background_learner_threads.append(threading.Thread(target=net_train,
+                                                                            args=(self.background_nets[i], X, r, c, y, self.background_train_results, i, self.last_detected_drift_around,)))
 
-            for i in range(len(self.background_nets)):
-                self.background_learner_threads[i].start()
+                for i in range(len(self.background_nets)):
+                    self.background_learner_threads[i].start()
         else:  # there are live background learner threads
-            # TODO: CPython does not support multi threading: https://docs.python.org/3/library/threading.html
-            #  we still may be fine as long as we dont compile module using CPython.
-            #  Multiprocessing is an alternative:
-            #  https://docs.python.org/3/library/multiprocessing.html#module-multiprocessing
-            for i in range(len(self.background_nets)):
-                self.background_learner_threads[i].join()
-            self.background_learner_threads = []
+            # wait for self.background_training_after instances to join them
+            if self.samples_seen % self.background_training_after == self.background_training_after - 1:
+                # TODO: CPython does not support multi threading: https://docs.python.org/3/library/threading.html
+                #  we still may be fine as long as we don't compile the module using CPython.
+                #  Multiprocessing is an alternative:
+                #  https://docs.python.org/3/library/multiprocessing.html#module-multiprocessing
+                for i in range(len(self.background_nets)):
+                    self.background_learner_threads[i].join()
+                self.background_learner_threads = []
 
-            if self.foreground_train_results is not None:
-                min_back = np.argmin(self.background_train_results['accumulated_loss_since_last_drift_detected_by_parent'], axis=0)
-                max_fore = np.argmax(self.foreground_train_results['accumulated_loss_since_last_drift_detected_by_parent'], axis=0)
-                # min_back < max_fore
-                if self.background_train_results['accumulated_loss_since_last_drift_detected_by_parent'][min_back] \
-                        < self.foreground_train_results['accumulated_loss_since_last_drift_detected_by_parent'][max_fore]:
-                    tmp_net = self.foreground_nets[max_fore]
-                    self.foreground_nets[max_fore] = self.background_nets[min_back]
-                    self.background_nets[min_back] = tmp_net
-
-                self.foreground_train_results = None
+                if self.foreground_train_results is not None:
+                    min_back = np.argmin(self.background_train_results['avg_loss_since_last_detected_drift_by_parent'], axis=0)
+                    max_fore = np.argmax(self.foreground_train_results['avg_loss_since_last_detected_drift_by_parent'], axis=0)
+                    # min_back < max_fore
+                    if self.background_train_results['avg_loss_since_last_detected_drift_by_parent'][min_back] \
+                            < self.foreground_train_results['avg_loss_since_last_detected_drift_by_parent'][max_fore]:
+                        tmp_net = self.foreground_nets[max_fore]
+                        self.foreground_nets[max_fore] = self.background_nets[min_back]
+                        self.background_nets[min_back] = tmp_net
 
         self.foreground_train_results = {'probas': [None] * len(self.foreground_nets),
                                          'y_hats': [None] * len(self.foreground_nets),
-                                         'accumulated_loss_since_last_drift_detected_by_parent': [0] * len(
+                                         'avg_loss_since_last_detected_drift_by_parent': [0] * len(
                                              self.foreground_nets)}
         if self.use_threads:
             t = []
@@ -496,15 +503,6 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         for i in range(len(self.foreground_nets)):
             net_predict_proba(self.foreground_nets[i], X, r, c, probas, i)
 
-        if self.samples_seen == 45310:
-            print('optimizer_type,learning_rate,accumulated_loss,accumulated_loss_since_last_drift_detected_by_parent')
-            for i in range(len(self.foreground_nets)):
-                print('{},{},{},{}'.format(
-                    self.foreground_nets[i].optimizer_type,
-                    self.foreground_nets[i].learning_rate,
-                    self.foreground_nets[i].accumulated_loss,
-                    self.foreground_nets[i].accumulated_loss_since_last_drift_detected_by_parent))
-            print(self)
         return np.asarray(probas)
 
     def reset(self):
@@ -515,3 +513,26 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
 
     def __str__(self):
         return str(self.__class__) + ": " + str(self.__dict__)
+
+    def stream_ended(self):
+        print('\nNetwork configuration:\n'
+              '{}\n'
+              '=======================================\n'
+              'Foreground Nets\n'.format(self))
+        print('optimizer_type,learning_rate,accumulated_loss,accumulated_loss_since_last_detected_drift_by_parent')
+        for i in range(len(self.foreground_nets)):
+            print('{},{},{},{}'.format(
+                self.foreground_nets[i].optimizer_type,
+                self.foreground_nets[i].learning_rate,
+                self.foreground_nets[i].accumulated_loss/self.foreground_nets[i].samples_seen,
+                self.foreground_nets[i].accumulated_loss_since_last_detected_drift_by_parent/self.foreground_nets[i].samples_seen_after_last_detected_drift_by_parent))
+        print('\n'
+              'Background Nets\n'.format(self))
+        for i in range(len(self.background_nets)):
+            print('{},{},{},{}'.format(
+                self.background_nets[i].optimizer_type,
+                self.background_nets[i].learning_rate,
+                self.background_nets[i].accumulated_loss / self.background_nets[i].samples_seen,
+                self.background_nets[i].accumulated_loss_since_last_detected_drift_by_parent / self.background_nets[
+                    i].samples_seen_after_last_detected_drift_by_parent))
+        print('\n')
