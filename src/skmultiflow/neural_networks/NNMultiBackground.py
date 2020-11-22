@@ -105,6 +105,9 @@ class ANN:
         self.label_to_class = {}
         self.samples_seen = 0
         self.detected_warnings = 0
+        self.accumulated_loss = 0
+        self.accumulated_loss_since_last_drift_detected_by_parent = 0
+        self.last_detected_drift_by_parent_at = 0
 
         self.init_values()
 
@@ -119,6 +122,9 @@ class ANN:
         self.label_to_class = {}
         self.samples_seen = 0
         self.detected_warnings = 0
+        self.accumulated_loss = 0
+        self.accumulated_loss_since_last_drift_detected_by_parent = 0
+        self.last_detected_drift_by_parent_at = 0
 
         initialize_network = False
 
@@ -147,7 +153,6 @@ class ANN:
             self.device = torch.device("cpu")
         else:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        # print(self.device)
 
     def init_optimizer(self):
         if self.optimizer_type == OP_TYPE_ADAGRAD or self.optimizer_type == OP_TYPE_ADAGRAD_NC:
@@ -208,12 +213,16 @@ class ANN:
             self.loss = self.criterion(output, y)
             self.loss.backward()
             self.optimizer.step()  # Does the update
+            self.accumulated_loss += self.loss.item()
+            self.accumulated_loss_since_last_drift_detected_by_parent += self.loss.item()
+
+        labels_proba = torch.cat((1 - output, output), 1).detach()
+        # TODO: we may have to have a special case for batch processing
+        predicted_labels = torch.argmax(labels_proba, dim=1).detach()
 
         if self.drift_detection_method is not None:
             # get predicted class and compare with actual class label
-            labels_proba = torch.cat((1 - output, output), 1)
-            predicted_label = torch.argmax(labels_proba, dim=1)
-            predicted_matches_actual = predicted_label == y
+            predicted_matches_actual = predicted_labels == y
             self.drift_detection_method.add_element(1 if predicted_matches_actual else 0)
             if self.warning_detection_method is not None:
                 self.warning_detection_method.add_element(1 if predicted_matches_actual else 0)
@@ -236,16 +245,24 @@ class ANN:
                 self.detected_warnings = 0
                 self.init_optimizer()
 
-    def partial_fit(self, X, r, c, y):
-        # r, c = get_dimensions(X)
+        return labels_proba, predicted_labels
+
+    def partial_fit(self, X, r, c, y, last_detected_drift_by_parent_at):
+        if self.last_detected_drift_by_parent_at < last_detected_drift_by_parent_at:
+            self.accumulated_loss_since_last_drift_detected_by_parent = 0
+            self.last_detected_drift_by_parent_at = last_detected_drift_by_parent_at
         if self.net is None:
             self.network_layers[0]['input_d'] = c
             self.initialize_network(self.network_layers)
 
         if self.process_as_a_batch:
             self.samples_seen += r
-            self.train_net(x=torch.from_numpy(X).float(), y=torch.from_numpy(np.array(y)).view(-1, 1).float())
+            # probas, y_hats are still tensors
+            probas, y_hats = self.train_net(x=torch.from_numpy(X).float(), y=torch.from_numpy(np.array(y)).view(-1, 1).float())
+            return probas.numpy(), y_hats.numpy(), self.accumulated_loss_since_last_drift_detected_by_parent
         else:  # per instance processing (default behaviour)
+            probas = None
+            y_hats = None
             for i in range(r):
                 x = torch.from_numpy(X[i])
                 yy = torch.from_numpy(np.array(y[i]))
@@ -254,9 +271,14 @@ class ANN:
                 x.unsqueeze(0)
                 yy.unsqueeze(0)
                 self.samples_seen += 1
-                self.train_net(x=x, y=yy)
-
-        return self
+                proba, y_hat = self.train_net(x=x, y=yy)
+                if i == 0:
+                    probas = proba.detach().clone()
+                    y_hats = y_hat.detach().clone()
+                else:
+                    torch.cat(probas, proba, dim=0, out=probas)
+                    torch.cat(y_hats, y_hat, dim=0, out=y_hats)
+            return probas.numpy(), y_hats.numpy(), self.accumulated_loss_since_last_drift_detected_by_parent
 
     def predict_proba(self, X, r, c):
         # r, c = get_dimensions(X)
@@ -287,12 +309,16 @@ class ANN:
         return str(self.__class__) + ": " + str(self.__dict__)
 
 
-def net_train(net: ANN, X: np.ndarray, r, c, y: np.ndarray):
-    net.partial_fit(X, r, c, y)
+def net_train(net: ANN, X: np.ndarray, r, c, y: np.ndarray, train_results, i, last_detected_drift_by_parent_at):
+    # train_results = {'probas': probas, 'y_hats': y_hats, 'accumulated_loss_since_last_drift_detected_by_parent': 0}
+    train_results['probas'][i], train_results['y_hats'][i], train_results['accumulated_loss_since_last_drift_detected_by_parent'][i] = net.partial_fit(X, r, c, y, last_detected_drift_by_parent_at)
+    # train_results['probas'][i] = probas
+    # train_results['y_hats'][i] = y_hats
+    # train_results['accumulated_loss_since_last_drift_detected_by_parent'][i] = accumulated_loss_since_last_drift_detected_by_parent
 
 
-def net_predict_proba(net: ANN, X: np.ndarray, r, c, proba, i):
-    proba[i] = net.predict_proba(X, r, c)
+def net_predict_proba(net: ANN, X: np.ndarray, r, c, probas, i):
+    probas[i] = net.predict_proba(X, r, c)
 
 
 net_config = [
@@ -300,26 +326,22 @@ net_config = [
     {'optimizer_type': OP_TYPE_SGD_NC, 'l_rate': 0.05},
     {'optimizer_type': OP_TYPE_SGD_NC, 'l_rate': 0.07},
     {'optimizer_type': OP_TYPE_RMSPROP_NC, 'l_rate': 0.01},
-    {'optimizer_type': OP_TYPE_ADAGRAD, 'l_rate': 0.03},
+    # {'optimizer_type': OP_TYPE_ADAGRAD, 'l_rate': 0.03},
     {'optimizer_type': OP_TYPE_ADAGRAD_NC, 'l_rate': 0.03},
-    {'optimizer_type': OP_TYPE_ADAGRAD, 'l_rate': 0.07},
-    {'optimizer_type': OP_TYPE_ADAGRAD, 'l_rate': 0.09},
+    # {'optimizer_type': OP_TYPE_ADAGRAD, 'l_rate': 0.07},
+    {'optimizer_type': OP_TYPE_ADAGRAD_NC, 'l_rate': 0.07},
+    # {'optimizer_type': OP_TYPE_ADAGRAD, 'l_rate': 0.09},
     {'optimizer_type': OP_TYPE_ADAGRAD_NC, 'l_rate': 0.09},
-    {'optimizer_type': OP_TYPE_ADAM, 'l_rate': 0.01},
+    # {'optimizer_type': OP_TYPE_ADAM, 'l_rate': 0.01},
     {'optimizer_type': OP_TYPE_ADAM_NC, 'l_rate': 0.01},
 ]
 
 
 class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
     def __init__(self,
-                 learning_rate=0.03,
-                 network_layers=default_network_layers,
                  class_labels=['0','1'],  # {'up':0,'down':1}
                  use_cpu=True,
                  process_as_a_batch=False,
-                 optimizer_type=OP_TYPE_SGD,
-                 warning_detection_method: BaseDriftDetector = ADWIN(delta=1e-8),
-                 drift_detection_method: BaseDriftDetector = ADWIN(delta=1e-3),
                  use_threads=False):
         # configuration variables (which has the same name as init parameters)
         self.class_labels = class_labels
@@ -328,11 +350,17 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         super().__init__()
 
         # status variables
-        self.nets = []  # type: List[ANN]
         self.class_to_label = {}
-        self.init_values()
+        self.nets = []  # type: List[ANN]
+        self.drift_detection_method = None
+        self.warning_detection_method = None
+        self.detected_warnings = 0
+        self.samples_seen = 0
+        self.last_detected_drift_around = 0
 
-    def init_values(self):
+        self.init_status_values()
+
+    def init_status_values(self):
         # init status variables
         self.class_to_label = {}
         for i in range(len(self.class_labels)):
@@ -342,12 +370,24 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
             self.nets.append(ANN(learning_rate=net_config[i]['l_rate'], optimizer_type=net_config[i]['optimizer_type'],
                                  class_labels=self.class_labels))
 
+        self.drift_detection_method = ADWIN(delta=1e-3, direction=ADWIN.DETECT_DOWN)
+        self.warning_detection_method = ADWIN(delta=1e-8, direction=ADWIN.DETECT_DOWN)
+
+        self.detected_warnings = 0
+        self.samples_seen = 0
+        self.last_detected_drift_around = 0
+        print(self)
+
     def partial_fit(self, X, y, classes=None, sample_weight=None):
         r, c = get_dimensions(X)
+        self.samples_seen += r
+
+        foreground_train_results = {'probas': [None] * len(self.nets), 'y_hats': [None] * len(self.nets), 'accumulated_loss_since_last_drift_detected_by_parent': [0] * len(self.nets)}
+
         if self.use_threads:
             t = []
             for i in range(len(self.nets)):
-                t.append(threading.Thread(target=net_train, args=(self.nets[i], X, r, c, y,)))
+                t.append(threading.Thread(target=net_train, args=(self.nets[i], X, r, c, y, foreground_train_results, i, self.last_detected_drift_around,)))
 
             for i in range(len(self.nets)):
                 t[i].start()
@@ -356,7 +396,37 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                 t[i].join()
         else:
             for i in range(len(self.nets)):
-                net_train(self.nets[i], X, r, c, y)
+                net_train(self.nets[i], X, r, c, y, foreground_train_results, i, self.last_detected_drift_around)
+
+        if self.drift_detection_method is not None:
+            # get predicted class and compare with actual class label
+            predicted_label = vectorized_map_class_to_label(np.argmax(np.sum(foreground_train_results['probas'], axis=0) / len(self.nets), axis=1),
+                                                            class_to_label_map=self.class_to_label)
+            # TODO: we may have to have a special case for batch processing
+            predicted_matches_actual = predicted_label == y
+
+            self.drift_detection_method.add_element(1 if predicted_matches_actual else 0)
+            if self.warning_detection_method is not None:
+                self.warning_detection_method.add_element(1 if predicted_matches_actual else 0)
+
+            # pass the difference to the detector
+            # predicted_matches_actual = torch.abs(y-output).detach().numpy()[0]
+            # self.drift_detection_method.add_element(predicted_matches_actual)
+
+            # Check if the was a warning
+            if self.warning_detection_method is not None:
+                if self.warning_detection_method.detected_change():
+                    self.detected_warnings += 1
+            else:  # warning detector is None, hence drift detector has warning detection capability.
+                if self.drift_detection_method.detected_warning_zone():
+                    self.detected_warnings += 1  # 3 is the threshold level
+            # Check if the was a change
+            if self.detected_warnings > 3 and self.drift_detection_method.detected_change():
+                print('Drift detected by {} around {} th sample.'.format(
+                    self.drift_detection_method, self.samples_seen))
+                self.detected_warnings = 0
+                self.last_detected_drift_around = self.samples_seen
+                # Find the the worst learner from the foreground and replace it with the background
 
         return self
 
@@ -365,15 +435,15 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         pred_sum_per_class = np.sum(y_proba, axis=0)
         pred_avgsum_per_class = np.divide(pred_sum_per_class, len(self.nets))
         y_pred = np.argmax(pred_avgsum_per_class, axis=0)
-        return vectorized_map_class_to_label([y_pred], class_to_label_map=self.class_to_label)
+        return vectorized_map_class_to_label(np.asarray([y_pred]), class_to_label_map=self.class_to_label)
 
     def predict_proba(self, X):
         r, c = get_dimensions(X)
-        proba = np.zeros([len(self.nets), 2])
+        probas = np.zeros([len(self.nets), len(self.class_labels)])
         # if self.use_threads:
         #     t = []
         #     for i in range(len(self.nets)):
-        #         t.append(threading.Thread(target=net_predict_proba, args=(self.nets[i], X, r, c, proba, i,)))
+        #         t.append(threading.Thread(target=net_predict_proba, args=(self.nets[i], X, r, c, probas, i,)))
         #
         #     for i in range(len(self.nets)):
         #         t[i].start()
@@ -382,11 +452,23 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         #         t[i].join()
         # else:
         for i in range(len(self.nets)):
-            net_predict_proba(self.nets[i], X, r, c, proba, i)
-        return np.asarray(proba)
+            net_predict_proba(self.nets[i], X, r, c, probas, i)
+
+        if self.samples_seen == 45310:
+            for i in range(len(self.nets)):
+                print('{},{},{},{}'.format(
+                    self.nets[i].optimizer_type,
+                    self.nets[i].learning_rate,
+                    self.nets[i].accumulated_loss,
+                    self.nets[i].accumulated_loss_since_last_drift_detected_by_parent))
+            print(self)
+        return np.asarray(probas)
 
     def reset(self):
         # configuration variables (which has the same name as init parameters) should be copied by the caller function
         for i in range(len(self.nets)):
             self.nets[i].reset()
         return self
+
+    def __str__(self):
+        return str(self.__class__) + ": " + str(self.__dict__)
