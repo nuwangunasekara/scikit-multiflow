@@ -489,6 +489,19 @@ class ClassifierMixin(metaclass=ABCMeta):
         from sklearn.metrics import accuracy_score
         return accuracy_score(y, self.predict(X), sample_weight=sample_weight)
 
+    def stream_ended(self):
+        """ called when stream ends
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+        None
+
+        """
+        raise NotImplementedError
+
 
 class RegressorMixin(metaclass=ABCMeta):
     """Mixin class for all regression estimators in scikit-multiflow."""
