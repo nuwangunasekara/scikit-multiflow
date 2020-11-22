@@ -372,6 +372,11 @@ class EvaluatePrequential(StreamEvaluator):
                     self._update_metrics()
                 break
 
+        # call module stream_ended if available
+        for i in range(self.n_models):
+            if self.model[i].stream_ended:
+                self.model[i].stream_ended()
+
         # Flush file buffer, in case it contains data
         self._flush_file_buffer()
 
