@@ -310,30 +310,26 @@ class ANN:
 
 
 def net_train(net: ANN, X: np.ndarray, r, c, y: np.ndarray, train_results, i, last_detected_drift_by_parent_at):
-    # train_results = {'probas': probas, 'y_hats': y_hats, 'accumulated_loss_since_last_drift_detected_by_parent': 0}
     train_results['probas'][i], train_results['y_hats'][i], train_results['accumulated_loss_since_last_drift_detected_by_parent'][i] = net.partial_fit(X, r, c, y, last_detected_drift_by_parent_at)
-    # train_results['probas'][i] = probas
-    # train_results['y_hats'][i] = y_hats
-    # train_results['accumulated_loss_since_last_drift_detected_by_parent'][i] = accumulated_loss_since_last_drift_detected_by_parent
 
 
 def net_predict_proba(net: ANN, X: np.ndarray, r, c, probas, i):
     probas[i] = net.predict_proba(X, r, c)
 
 
-net_config = [
+foreground_net_config = [
     {'optimizer_type': OP_TYPE_SGD_NC, 'l_rate': 0.03},
-    {'optimizer_type': OP_TYPE_SGD_NC, 'l_rate': 0.05},
     {'optimizer_type': OP_TYPE_SGD_NC, 'l_rate': 0.07},
     {'optimizer_type': OP_TYPE_RMSPROP_NC, 'l_rate': 0.01},
-    # {'optimizer_type': OP_TYPE_ADAGRAD, 'l_rate': 0.03},
     {'optimizer_type': OP_TYPE_ADAGRAD_NC, 'l_rate': 0.03},
-    # {'optimizer_type': OP_TYPE_ADAGRAD, 'l_rate': 0.07},
-    {'optimizer_type': OP_TYPE_ADAGRAD_NC, 'l_rate': 0.07},
-    # {'optimizer_type': OP_TYPE_ADAGRAD, 'l_rate': 0.09},
     {'optimizer_type': OP_TYPE_ADAGRAD_NC, 'l_rate': 0.09},
-    # {'optimizer_type': OP_TYPE_ADAM, 'l_rate': 0.01},
     {'optimizer_type': OP_TYPE_ADAM_NC, 'l_rate': 0.01},
+]
+
+background_net_config = [
+    {'optimizer_type': OP_TYPE_SGD_NC, 'l_rate': 0.05},
+    {'optimizer_type': OP_TYPE_ADAGRAD_NC, 'l_rate': 0.07},
+    {'optimizer_type': OP_TYPE_ADAGRAD, 'l_rate': 0.09},
 ]
 
 
@@ -351,12 +347,16 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
 
         # status variables
         self.class_to_label = {}
-        self.nets = []  # type: List[ANN]
+        self.foreground_nets = []  # type: List[ANN]
+        self.background_nets = []  # type: List[ANN]
         self.drift_detection_method = None
         self.warning_detection_method = None
         self.detected_warnings = 0
         self.samples_seen = 0
         self.last_detected_drift_around = 0
+        self.background_learner_threads = []
+        self.background_train_results = None
+        self.foreground_train_results = None
 
         self.init_status_values()
 
@@ -366,9 +366,13 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         for i in range(len(self.class_labels)):
             self.class_to_label.update({i: self.class_labels[i]})
 
-        for i in range(len(net_config)):
-            self.nets.append(ANN(learning_rate=net_config[i]['l_rate'], optimizer_type=net_config[i]['optimizer_type'],
-                                 class_labels=self.class_labels))
+        for i in range(len(foreground_net_config)):
+            self.foreground_nets.append(ANN(learning_rate=foreground_net_config[i]['l_rate'], optimizer_type=foreground_net_config[i]['optimizer_type'],
+                                            class_labels=self.class_labels))
+
+        for i in range(len(background_net_config)):
+            self.background_nets.append(ANN(learning_rate=foreground_net_config[i]['l_rate'], optimizer_type=background_net_config[i]['optimizer_type'],
+                                            class_labels=self.class_labels))
 
         self.drift_detection_method = ADWIN(delta=1e-3, direction=ADWIN.DETECT_DOWN)
         self.warning_detection_method = ADWIN(delta=1e-8, direction=ADWIN.DETECT_DOWN)
@@ -376,31 +380,69 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         self.detected_warnings = 0
         self.samples_seen = 0
         self.last_detected_drift_around = 0
+        self.background_learner_threads = []
+        self.background_train_results = None
+        self.foreground_train_results = None
         print(self)
 
     def partial_fit(self, X, y, classes=None, sample_weight=None):
         r, c = get_dimensions(X)
         self.samples_seen += r
 
-        foreground_train_results = {'probas': [None] * len(self.nets), 'y_hats': [None] * len(self.nets), 'accumulated_loss_since_last_drift_detected_by_parent': [0] * len(self.nets)}
+        # if self.samples_seen % 2 == 0:
+        if len(self.background_learner_threads) == 0:
+            self.background_train_results = {'probas': [None] * len(self.background_nets),
+                                             'y_hats': [None] * len(self.background_nets),
+                                             'accumulated_loss_since_last_drift_detected_by_parent': [0] * len(
+                                                 self.background_nets)}
+            for i in range(len(self.background_nets)):
+                self.background_learner_threads.append(threading.Thread(target=net_train,
+                                                                        args=(self.background_nets[i], X, r, c, y, self.background_train_results, i, self.last_detected_drift_around,)))
 
+            for i in range(len(self.background_nets)):
+                self.background_learner_threads[i].start()
+        else:  # there are live background learner threads
+            # TODO: CPython does not support multi threading: https://docs.python.org/3/library/threading.html
+            #  we still may be fine as long as we dont compile module using CPython.
+            #  Multiprocessing is an alternative:
+            #  https://docs.python.org/3/library/multiprocessing.html#module-multiprocessing
+            for i in range(len(self.background_nets)):
+                self.background_learner_threads[i].join()
+            self.background_learner_threads = []
+
+            if self.foreground_train_results is not None:
+                min_back = np.argmin(self.background_train_results['accumulated_loss_since_last_drift_detected_by_parent'], axis=0)
+                max_fore = np.argmax(self.foreground_train_results['accumulated_loss_since_last_drift_detected_by_parent'], axis=0)
+                # min_back < max_fore
+                if self.background_train_results['accumulated_loss_since_last_drift_detected_by_parent'][min_back] \
+                        < self.foreground_train_results['accumulated_loss_since_last_drift_detected_by_parent'][max_fore]:
+                    tmp_net = self.foreground_nets[max_fore]
+                    self.foreground_nets[max_fore] = self.background_nets[min_back]
+                    self.background_nets[min_back] = tmp_net
+
+                self.foreground_train_results = None
+
+        self.foreground_train_results = {'probas': [None] * len(self.foreground_nets),
+                                         'y_hats': [None] * len(self.foreground_nets),
+                                         'accumulated_loss_since_last_drift_detected_by_parent': [0] * len(
+                                             self.foreground_nets)}
         if self.use_threads:
             t = []
-            for i in range(len(self.nets)):
-                t.append(threading.Thread(target=net_train, args=(self.nets[i], X, r, c, y, foreground_train_results, i, self.last_detected_drift_around,)))
+            for i in range(len(self.foreground_nets)):
+                t.append(threading.Thread(target=net_train, args=(self.foreground_nets[i], X, r, c, y, self.foreground_train_results, i, self.last_detected_drift_around,)))
 
-            for i in range(len(self.nets)):
+            for i in range(len(self.foreground_nets)):
                 t[i].start()
 
-            for i in range(len(self.nets)):
+            for i in range(len(self.foreground_nets)):
                 t[i].join()
         else:
-            for i in range(len(self.nets)):
-                net_train(self.nets[i], X, r, c, y, foreground_train_results, i, self.last_detected_drift_around)
+            for i in range(len(self.foreground_nets)):
+                net_train(self.foreground_nets[i], X, r, c, y, self.foreground_train_results, i, self.last_detected_drift_around)
 
         if self.drift_detection_method is not None:
             # get predicted class and compare with actual class label
-            predicted_label = vectorized_map_class_to_label(np.argmax(np.sum(foreground_train_results['probas'], axis=0) / len(self.nets), axis=1),
+            predicted_label = vectorized_map_class_to_label(np.argmax(np.sum(self.foreground_train_results['probas'], axis=0) / len(self.foreground_nets), axis=1),
                                                             class_to_label_map=self.class_to_label)
             # TODO: we may have to have a special case for batch processing
             predicted_matches_actual = predicted_label == y
@@ -433,13 +475,13 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
     def predict(self, X):
         y_proba = self.predict_proba(X)
         pred_sum_per_class = np.sum(y_proba, axis=0)
-        pred_avgsum_per_class = np.divide(pred_sum_per_class, len(self.nets))
+        pred_avgsum_per_class = np.divide(pred_sum_per_class, len(self.foreground_nets))
         y_pred = np.argmax(pred_avgsum_per_class, axis=0)
         return vectorized_map_class_to_label(np.asarray([y_pred]), class_to_label_map=self.class_to_label)
 
     def predict_proba(self, X):
         r, c = get_dimensions(X)
-        probas = np.zeros([len(self.nets), len(self.class_labels)])
+        probas = np.zeros([len(self.foreground_nets), len(self.class_labels)])
         # if self.use_threads:
         #     t = []
         #     for i in range(len(self.nets)):
@@ -451,23 +493,24 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         #     for i in range(len(self.nets)):
         #         t[i].join()
         # else:
-        for i in range(len(self.nets)):
-            net_predict_proba(self.nets[i], X, r, c, probas, i)
+        for i in range(len(self.foreground_nets)):
+            net_predict_proba(self.foreground_nets[i], X, r, c, probas, i)
 
         if self.samples_seen == 45310:
-            for i in range(len(self.nets)):
+            print('optimizer_type,learning_rate,accumulated_loss,accumulated_loss_since_last_drift_detected_by_parent')
+            for i in range(len(self.foreground_nets)):
                 print('{},{},{},{}'.format(
-                    self.nets[i].optimizer_type,
-                    self.nets[i].learning_rate,
-                    self.nets[i].accumulated_loss,
-                    self.nets[i].accumulated_loss_since_last_drift_detected_by_parent))
+                    self.foreground_nets[i].optimizer_type,
+                    self.foreground_nets[i].learning_rate,
+                    self.foreground_nets[i].accumulated_loss,
+                    self.foreground_nets[i].accumulated_loss_since_last_drift_detected_by_parent))
             print(self)
         return np.asarray(probas)
 
     def reset(self):
         # configuration variables (which has the same name as init parameters) should be copied by the caller function
-        for i in range(len(self.nets)):
-            self.nets[i].reset()
+        for i in range(len(self.foreground_nets)):
+            self.foreground_nets[i].reset()
         return self
 
     def __str__(self):
