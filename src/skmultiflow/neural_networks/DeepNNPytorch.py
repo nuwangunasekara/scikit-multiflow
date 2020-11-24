@@ -285,3 +285,6 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         # configuration variables (which has the same name as init parameters) should be copied by the caller function
         self.init_values()
         return self
+
+    def stream_ended(self):
+        pass
