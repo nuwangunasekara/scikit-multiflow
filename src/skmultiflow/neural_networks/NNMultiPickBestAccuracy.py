@@ -105,7 +105,7 @@ class ANN:
         self.label_to_class = {}
         self.samples_seen = 0
         self.detected_warnings = 0
-        self.accumulated_loss = 0
+        self.correctly_predicted_count = 0
         self.init_values()
 
     def init_values(self):
@@ -119,7 +119,7 @@ class ANN:
         self.label_to_class = {}
         self.samples_seen = 0
         self.detected_warnings = 0
-        self.accumulated_loss = 0
+        self.correctly_predicted_count = 0
 
         initialize_network = False
 
@@ -188,6 +188,7 @@ class ANN:
         self.initialize_net_para()
 
     def train_net(self, x, y):
+        predicted_matches_actual = False
         if torch.cuda.is_available():
             if self.device.type == 'cpu':
                 pass
@@ -209,15 +210,16 @@ class ANN:
             self.loss = self.criterion(output, y)
             self.loss.backward()
             self.optimizer.step()  # Does the update
-            self.accumulated_loss += self.loss.item()
         output = output.detach()
         labels_proba = torch.cat((1 - output, output), 1).detach()
         # TODO: we may have to have a special case for batch processing
         predicted_labels = torch.argmax(labels_proba, dim=1).detach()
+        if predicted_labels == y:
+            predicted_matches_actual = True
+            self.correctly_predicted_count += 1
 
         if self.drift_detection_method is not None:
             # get predicted class and compare with actual class label
-            predicted_matches_actual = predicted_labels == y
             self.drift_detection_method.add_element(1 if predicted_matches_actual else 0)
             if self.warning_detection_method is not None:
                 self.warning_detection_method.add_element(1 if predicted_matches_actual else 0)
@@ -240,8 +242,6 @@ class ANN:
                 self.detected_warnings = 0
                 self.init_optimizer()
 
-        return labels_proba, predicted_labels
-
     def partial_fit(self, X, r, c, y):
         # r, c = get_dimensions(X)
         if self.net is None:
@@ -251,8 +251,7 @@ class ANN:
         if self.process_as_a_batch:
             self.samples_seen += r
             # probas, y_hats are still tensors
-            probas, y_hats = self.train_net(x=torch.from_numpy(X).float(), y=torch.from_numpy(np.array(y)).view(-1, 1).float())
-            return probas.numpy(), y_hats.numpy(), self.accumulated_loss
+            self.train_net(x=torch.from_numpy(X).float(), y=torch.from_numpy(np.array(y)).view(-1, 1).float())
         else:  # per instance processing (default behaviour)
             for i in range(r):
                 x = torch.from_numpy(X[i])
@@ -262,14 +261,7 @@ class ANN:
                 x.unsqueeze(0)
                 yy.unsqueeze(0)
                 self.samples_seen += 1
-                proba, y_hat = self.train_net(x=x, y=yy)
-                if i == 0:
-                    probas = proba.detach().clone()
-                    y_hats = y_hat.detach().clone()
-                else:
-                    torch.cat(probas, proba, dim=0, out=probas)
-                    torch.cat(y_hats, y_hat, dim=0, out=y_hats)
-        return probas.numpy(), y_hats.numpy(), self.accumulated_loss
+                self.train_net(x=x, y=yy)
 
     def predict_proba(self, X, r, c):
         if self.net is None:
@@ -298,8 +290,8 @@ class ANN:
         return str(self.__class__) + ": " + str(self.__dict__)
 
 
-def net_train(net: ANN, X: np.ndarray, r, c, y: np.ndarray, train_results, i):
-    train_results['probas'][i], train_results['y_hats'][i], train_results['accumulated_loss'][i] = net.partial_fit(X, r, c, y)
+def net_train(net: ANN, X: np.ndarray, r, c, y: np.ndarray):
+    net.partial_fit(X, r, c, y)
 
 net_config = [
     {'optimizer_type': OP_TYPE_SGD_NC, 'l_rate': 0.03},
@@ -360,13 +352,10 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
     def partial_fit(self, X, y, classes=None, sample_weight=None):
         r, c = get_dimensions(X)
         self.samples_seen += r
-        self.last_train_results = {'probas': [None] * len(self.nets),
-                                         'y_hats': [None] * len(self.nets),
-                                         'accumulated_loss': [0] * len(self.nets)}
         if self.use_threads:
             t = []
             for i in range(len(self.nets)):
-                t.append(threading.Thread(target=net_train, args=(self.nets[i], X, r, c, y, self.last_train_results, i,)))
+                t.append(threading.Thread(target=net_train, args=(self.nets[i], X, r, c, y,)))
 
             for i in range(len(self.nets)):
                 t[i].start()
@@ -375,15 +364,18 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                 t[i].join()
         else:
             for i in range(len(self.nets)):
-                net_train(self.nets[i], X, r, c, y, self.last_train_results, i)
+                net_train(self.nets[i], X, r, c, y,)
 
         return self
 
     def predict(self, X):
         r, c = get_dimensions(X)
         current_best = 0
-        if self.last_train_results is not None:
-            current_best = np.argmin(self.last_train_results['accumulated_loss'], axis=0)
+        if self.samples_seen > 0 :
+            current_accuracies = [0] * len(self.nets)
+            for i in range(len(self.nets)):
+                current_accuracies[i] = self.nets[i].correctly_predicted_count / self.nets[i].samples_seen * 100
+            current_best = np.argmin(current_accuracies, axis=0)
         self.chosen_counts[current_best] += 1
         probas = self.nets[current_best].predict_proba(X, r, c)
         y_pred = np.argmax(probas, axis=1)
@@ -404,25 +396,25 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
               '{}\n'
               '=======================================\n'
               'Foreground Nets\n'.format(self))
-        print('samples_seen,optimizer_type,learning_rate,accumulated_loss,chosen_counts')
+        print('samples_seen,optimizer_type,learning_rate,current_accuracy,chosen_counts')
         for i in range(len(self.nets)):
             print('{},{},{},{}'.format(
                 self.samples_seen,
                 self.nets[i].optimizer_type,
                 self.nets[i].learning_rate,
-                self.nets[i].accumulated_loss,
+                self.nets[i].correctly_predicted_count / self.nets[i].samples_seen * 100,
                 self.chosen_counts[i]))
         print('\n')
 
     def print_stats(self):
         if self.samples_seen > 0 and self.samples_seen % 1000 == 0:
             if not self.heading_printed:
-                print('id,optimizer_type_learning_rate,accumulated_loss,chosen_counts', file=self.stats_file)
+                print('id,optimizer_type_learning_rate,current_accuracy,chosen_counts', file=self.stats_file)
                 self.heading_printed = True
             for i in range(len(self.nets)):
                 print('{},{}_{},{},{}'.format(
                     self.samples_seen,
                     self.nets[i].optimizer_type,
                     self.nets[i].learning_rate,
-                    self.nets[i].accumulated_loss,
+                    self.nets[i].correctly_predicted_count / self.nets[i].samples_seen * 100,
                     self.chosen_counts[i]), file=self.stats_file)
