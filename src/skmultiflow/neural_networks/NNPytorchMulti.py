@@ -390,3 +390,6 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         for i in range(len(self.nets)):
             self.nets[i].reset()
         return self
+
+    def stream_ended(self):
+        pass
