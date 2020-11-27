@@ -240,8 +240,6 @@ class ANN:
                 self.detected_warnings = 0
                 self.init_optimizer()
 
-        return labels_proba, predicted_labels
-
     def partial_fit(self, X, r, c, y):
         # r, c = get_dimensions(X)
         if self.net is None:
@@ -251,8 +249,7 @@ class ANN:
         if self.process_as_a_batch:
             self.samples_seen += r
             # probas, y_hats are still tensors
-            probas, y_hats = self.train_net(x=torch.from_numpy(X).float(), y=torch.from_numpy(np.array(y)).view(-1, 1).float())
-            return probas.numpy(), y_hats.numpy(), self.accumulated_loss
+            self.train_net(x=torch.from_numpy(X).float(), y=torch.from_numpy(np.array(y)).view(-1, 1).float())
         else:  # per instance processing (default behaviour)
             for i in range(r):
                 x = torch.from_numpy(X[i])
@@ -262,14 +259,7 @@ class ANN:
                 x.unsqueeze(0)
                 yy.unsqueeze(0)
                 self.samples_seen += 1
-                proba, y_hat = self.train_net(x=x, y=yy)
-                if i == 0:
-                    probas = proba.detach().clone()
-                    y_hats = y_hat.detach().clone()
-                else:
-                    torch.cat(probas, proba, dim=0, out=probas)
-                    torch.cat(y_hats, y_hat, dim=0, out=y_hats)
-        return probas.numpy(), y_hats.numpy(), self.accumulated_loss
+                self.train_net(x=x, y=yy)
 
     def predict_proba(self, X, r, c):
         if self.net is None:
@@ -298,8 +288,8 @@ class ANN:
         return str(self.__class__) + ": " + str(self.__dict__)
 
 
-def net_train(net: ANN, X: np.ndarray, r, c, y: np.ndarray, train_results, i):
-    train_results['probas'][i], train_results['y_hats'][i], train_results['accumulated_loss'][i] = net.partial_fit(X, r, c, y)
+def net_train(net: ANN, X: np.ndarray, r, c, y: np.ndarray):
+    net.partial_fit(X, r, c, y)
 
 net_config = [
     {'optimizer_type': OP_TYPE_SGD_NC, 'l_rate': 0.03},
@@ -360,13 +350,10 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
     def partial_fit(self, X, y, classes=None, sample_weight=None):
         r, c = get_dimensions(X)
         self.samples_seen += r
-        self.last_train_results = {'probas': [None] * len(self.nets),
-                                         'y_hats': [None] * len(self.nets),
-                                         'accumulated_loss': [0] * len(self.nets)}
         if self.use_threads:
             t = []
             for i in range(len(self.nets)):
-                t.append(threading.Thread(target=net_train, args=(self.nets[i], X, r, c, y, self.last_train_results, i,)))
+                t.append(threading.Thread(target=net_train, args=(self.nets[i], X, r, c, y,)))
 
             for i in range(len(self.nets)):
                 t[i].start()
@@ -375,15 +362,17 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                 t[i].join()
         else:
             for i in range(len(self.nets)):
-                net_train(self.nets[i], X, r, c, y, self.last_train_results, i)
+                net_train(self.nets[i], X, r, c, y,)
 
         return self
 
     def predict(self, X):
         r, c = get_dimensions(X)
         current_best = 0
-        if self.last_train_results is not None:
-            current_best = np.argmin(self.last_train_results['accumulated_loss'], axis=0)
+        accumulated_loss = [0] * len(self.nets)
+        for i in range(len(self.nets)):
+            accumulated_loss[i] = self.nets[i].accumulated_loss
+        current_best = np.argmin(accumulated_loss, axis=0)
         self.chosen_counts[current_best] += 1
         probas = self.nets[current_best].predict_proba(X, r, c)
         y_pred = np.argmax(probas, axis=1)
