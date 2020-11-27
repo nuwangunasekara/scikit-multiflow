@@ -371,7 +371,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
     def predict(self, X):
         r, c = get_dimensions(X)
         current_best = 0
-        if self.samples_seen > 0 :
+        if self.samples_seen > 0:
             current_accuracies = [0] * len(self.nets)
             for i in range(len(self.nets)):
                 current_accuracies[i] = self.nets[i].correctly_predicted_count / self.nets[i].samples_seen * 100
