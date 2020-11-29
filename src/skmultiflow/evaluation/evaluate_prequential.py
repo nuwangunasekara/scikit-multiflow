@@ -374,7 +374,8 @@ class EvaluatePrequential(StreamEvaluator):
 
         # call module stream_ended if available
         for i in range(self.n_models):
-            if self.model[i].stream_ended:
+            if self.model[i].__class__.__name__ == 'DeepNNPytorch':
+            # if self.model[i].stream_ended:
                 self.model[i].stream_ended()
 
         # Flush file buffer, in case it contains data
