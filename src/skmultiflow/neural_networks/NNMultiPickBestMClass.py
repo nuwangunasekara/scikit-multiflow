@@ -28,7 +28,7 @@ OP_TYPE_ADAM_AMSG_NC = 'Adam-AMSG-NC'
 
 
 class PyNet(nn.Module):
-    def __init__(self, nn_layers=None):
+    def __init__(self, nn_layers: list = None, classes: tuple = None):
         super(PyNet, self).__init__()
         if nn_layers is None:
             return
@@ -37,7 +37,9 @@ class PyNet(nn.Module):
         for l in range(1, len(nn_layers), 1):
             if l == 1:
                 linear.append(nn.Linear(nn_layers[0]['input_d'], nn_layers[l]['neurons']))
-            else:
+            elif l == len(nn_layers) - 1:  # last layer
+                linear.append(nn.Linear(nn_layers[l - 1]['neurons'], len(classes)))
+            else:  # all the other layers
                 linear.append(nn.Linear(nn_layers[l - 1]['neurons'], nn_layers[l]['neurons']))
             if nn_layers[l]['g'] == Tanh:
                 self.f.append(nn.Tanh())
@@ -62,6 +64,7 @@ class ANN:
                  learning_rate=0.03,
                  network_layers=default_network_layers,
                  class_labels=['0','1'],  # {'up':0,'down':1}
+                 classes: tuple = None,  # classes=('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
                  use_cpu=True,
                  process_as_a_batch=False,
                  optimizer_type=OP_TYPE_SGD,
@@ -71,6 +74,7 @@ class ANN:
         self.learning_rate = learning_rate
         self.network_layers = copy.deepcopy(network_layers)
         self.class_labels = class_labels
+        self.classes = ('0', '1') if classes is None else classes
         self.use_cpu = use_cpu
         self.process_as_a_batch = process_as_a_batch
         self.optimizer_type = optimizer_type
@@ -177,13 +181,14 @@ class ANN:
         # for binary classification
         # combines a Sigmoid layer
         # self.criterion = nn.BCEWithLogitsLoss()
-        self.criterion = nn.BCELoss()
+        # self.criterion = nn.BCELoss()
+        self.criterion = nn.CrossEntropyLoss()
         print('Network configuration:\n'
               '{}\n'
               '======================================='.format(self))
 
     def initialize_network(self, network_layers=None):
-        self.net = PyNet(network_layers)
+        self.net = PyNet(network_layers, self.classes)
         self.initialize_net_para()
 
     def train_net(self, x, y):
@@ -198,21 +203,20 @@ class ANN:
 
         self.optimizer.zero_grad()  # zero the gradient buffers
         # # forward propagation
-        output = self.net(x)
+        outputs = self.net(x)
 
         # backward propagation
         # print(self.learning_rate)
         # print(self.net.linear[0].weight.data)
         if self.learning_rate > 0.0:
             # print('here')
-            self.loss = self.criterion(output, y)
+            self.loss = self.criterion(outputs, y.reshape((-1,)).long())
             self.loss.backward()
             self.optimizer.step()  # Does the update
             self.accumulated_loss += self.loss.item()
-        output = output.detach()
-        labels_proba = torch.cat((1 - output, output), 1).detach()
-        # TODO: we may have to have a special case for batch processing
-        predicted_labels = torch.argmax(labels_proba, dim=1).detach()
+        outputs = outputs.detach()
+        _, predicted_idxs = torch.max(outputs, 1)
+        predicted_labels = self.classes[predicted_idxs]
 
         if self.drift_detection_method is not None:
             # get predicted class and compare with actual class label
@@ -222,7 +226,7 @@ class ANN:
                 self.warning_detection_method.add_element(1 if predicted_matches_actual else 0)
 
             # pass the difference to the detector
-            # predicted_matches_actual = torch.abs(y-output).detach().numpy()[0]
+            # predicted_matches_actual = torch.abs(y - outputs).detach().numpy()[0]
             # self.drift_detection_method.add_element(predicted_matches_actual)
 
             # Check if the was a warning
@@ -240,14 +244,12 @@ class ANN:
                 self.init_optimizer()
 
     def partial_fit(self, X, r, c, y):
-        # r, c = get_dimensions(X)
         if self.net is None:
             self.network_layers[0]['input_d'] = c
             self.initialize_network(self.network_layers)
 
         if self.process_as_a_batch:
             self.samples_seen += r
-            # probas, y_hats are still tensors
             self.train_net(x=torch.from_numpy(X).float(), y=torch.from_numpy(np.array(y)).view(-1, 1).float())
         else:  # per instance processing (default behaviour)
             for i in range(r):
@@ -266,17 +268,20 @@ class ANN:
             self.initialize_network(self.network_layers)
 
         if self.process_as_a_batch:
-            y_prob = self.net(torch.from_numpy(X).float()).detach()
-            return torch.cat((1 - y_prob, y_prob), 1).detach().numpy()
+            return self.net(torch.from_numpy(X).float()).detach().numpy()
         else:  # per instance processing (default behaviour)
-            proba = []
+            proba = None
             for i in range(r):
                 x = torch.from_numpy(X[i])
                 x = x.view(1, -1).float()
                 x.unsqueeze(0)
-                y_prob = self.net(x).detach()
-                proba.append([1 - y_prob, y_prob])
-            return np.asarray(proba)
+                if r == 1:
+                    return self.net(x).detach().reshape((1, -1))
+                elif i == 0:
+                    proba = self.net(x).detach()
+                else:
+                    proba = torch.cat(proba, self.net(x).detach()).detach()
+            return proba
 
     def reset(self):
         # configuration variables (which has the same name as init parameters) should be copied by the caller function
@@ -308,11 +313,13 @@ net_config = [
 class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
     def __init__(self,
                  class_labels=['0','1'],  # {'up':0,'down':1}
+                 classes: tuple = None,  # classes=('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
                  use_cpu=True,
                  process_as_a_batch=False,
                  use_threads=False,
                  stats_file_name=None):
         # configuration variables (which has the same name as init parameters)
+        self.classes = ('0', '1') if classes is None else classes
         self.class_labels = class_labels
         self.use_threads = use_threads
         self.stats_file_name = stats_file_name
@@ -338,7 +345,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
 
         for i in range(len(net_config)):
             self.nets.append(ANN(learning_rate=net_config[i]['l_rate'], optimizer_type=net_config[i]['optimizer_type'],
-                                 class_labels=self.class_labels))
+                                 class_labels=self.class_labels, classes=self.classes))
         self.last_train_results = None
         self.chosen_counts = [0] * len(self.nets)
         self.heading_printed = False
@@ -373,10 +380,9 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
             accumulated_loss[i] = self.nets[i].accumulated_loss
         current_best = np.argmin(accumulated_loss, axis=0)
         self.chosen_counts[current_best] += 1
-        probas = self.nets[current_best].predict_proba(X, r, c)
-        y_pred = np.argmax(probas, axis=1)
+        _, predicted_idx = torch.max(self.nets[current_best].predict_proba(X, r, c), 1)
         self.print_stats()
-        return vectorized_map_class_to_label(np.asarray([y_pred]), class_to_label_map=self.class_to_label)
+        return [self.classes[predicted_idx.item()]]
 
     def predict_proba(self, X):
         pass
