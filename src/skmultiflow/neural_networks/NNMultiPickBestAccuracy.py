@@ -375,7 +375,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
             current_accuracies = [0] * len(self.nets)
             for i in range(len(self.nets)):
                 current_accuracies[i] = self.nets[i].correctly_predicted_count / self.nets[i].samples_seen * 100
-            current_best = np.argmin(current_accuracies, axis=0)
+            current_best = np.argmax(current_accuracies, axis=0)
         self.chosen_counts[current_best] += 1
         probas = self.nets[current_best].predict_proba(X, r, c)
         y_pred = np.argmax(probas, axis=1)
