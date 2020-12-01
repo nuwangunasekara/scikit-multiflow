@@ -26,6 +26,9 @@ OP_TYPE_ADAM_NC = 'Adam-NC'
 OP_TYPE_ADAM_AMSG = 'Adam-AMSG'
 OP_TYPE_ADAM_AMSG_NC = 'Adam-AMSG-NC'
 
+LOSS_F_TYPE_NLLLoss = 1
+LOSS_F_TYPE_MultiMarginLoss = 2
+
 
 class PyNet(nn.Module):
     def __init__(self, nn_layers: list = None, classes: tuple = None):
@@ -39,6 +42,8 @@ class PyNet(nn.Module):
                 linear.append(nn.Linear(nn_layers[0]['input_d'], nn_layers[l]['neurons']))
             elif l == len(nn_layers) - 1:  # last layer
                 linear.append(nn.Linear(nn_layers[l - 1]['neurons'], len(classes)))
+                # do not add sigmoid layer
+                continue
             else:  # all the other layers
                 linear.append(nn.Linear(nn_layers[l - 1]['neurons'], nn_layers[l]['neurons']))
             if nn_layers[l]['g'] == Tanh:
@@ -53,9 +58,13 @@ class PyNet(nn.Module):
                 pass
         self.linear = nn.ModuleList(linear)
 
-    def forward(self, x):
+    def forward(self, X):
+        x = X
         for i, l in enumerate(self.linear):
-            x = self.f[i](l(x))
+            if i == len(self.linear) - 1:
+                x = l(x)
+            else:
+                x = self.f[i](l(x))
         return x
 
 
@@ -69,7 +78,9 @@ class ANN:
                  process_as_a_batch=False,
                  optimizer_type=OP_TYPE_SGD,
                  warning_detection_method: BaseDriftDetector = ADWIN(delta=1e-8, direction=ADWIN.DETECT_DOWN),
-                 drift_detection_method: BaseDriftDetector = ADWIN(delta=1e-3, direction=ADWIN.DETECT_DOWN)):
+                 drift_detection_method: BaseDriftDetector = ADWIN(delta=1e-3, direction=ADWIN.DETECT_DOWN),
+                 loss_f_type=LOSS_F_TYPE_NLLLoss,
+                 softmax_f=nn.LogSoftmax(dim=1)):
         # configuration variables (which has the same name as init parameters)
         self.learning_rate = learning_rate
         self.network_layers = copy.deepcopy(network_layers)
@@ -98,6 +109,8 @@ class ANN:
                     self.warning_detection_method = None
             else:
                 self.warning_detection_method = warning_detection_method
+        self.loss_f_type = loss_f_type
+        self.softMax_f = softmax_f
 
         # status variables
         self.net = None
@@ -110,6 +123,8 @@ class ANN:
         self.samples_seen = 0
         self.detected_warnings = 0
         self.accumulated_loss = 0
+        self.loss_f = None
+
         self.init_values()
 
     def init_values(self):
@@ -124,6 +139,7 @@ class ANN:
         self.samples_seen = 0
         self.detected_warnings = 0
         self.accumulated_loss = 0
+        self.loss_f = None
 
         initialize_network = False
 
@@ -182,7 +198,11 @@ class ANN:
         # combines a Sigmoid layer
         # self.criterion = nn.BCEWithLogitsLoss()
         # self.criterion = nn.BCELoss()
-        self.criterion = nn.CrossEntropyLoss()
+        # self.criterion = nn.CrossEntropyLoss()
+        if self.loss_f_type == LOSS_F_TYPE_NLLLoss:
+            self.loss_f = nn.NLLLoss()
+        elif self.loss_f_type == LOSS_F_TYPE_MultiMarginLoss:
+            self.loss_f = nn.MultiMarginLoss()
         print('Network configuration:\n'
               '{}\n'
               '======================================='.format(self))
@@ -210,7 +230,9 @@ class ANN:
         # print(self.net.linear[0].weight.data)
         if self.learning_rate > 0.0:
             # print('here')
-            self.loss = self.criterion(outputs, y.reshape((-1,)).long())
+            # self.loss = self.criterion(outputs, y.reshape((-1,)).long())
+            # output = loss(m(inputd), target)
+            self.loss = self.loss_f(self.softMax_f(outputs), y.reshape((-1,)).long())
             self.loss.backward()
             self.optimizer.step()  # Does the update
             self.accumulated_loss += self.loss.item()
@@ -317,12 +339,14 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                  use_cpu=True,
                  process_as_a_batch=False,
                  use_threads=False,
-                 stats_file_name=None):
+                 stats_file_name=None,
+                 loss_f_type=LOSS_F_TYPE_NLLLoss):
         # configuration variables (which has the same name as init parameters)
         self.classes = ('0', '1') if classes is None else classes
         self.class_labels = class_labels
         self.use_threads = use_threads
         self.stats_file_name = stats_file_name
+        self.loss_f_type = loss_f_type
 
         super().__init__()
 
@@ -345,7 +369,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
 
         for i in range(len(net_config)):
             self.nets.append(ANN(learning_rate=net_config[i]['l_rate'], optimizer_type=net_config[i]['optimizer_type'],
-                                 class_labels=self.class_labels, classes=self.classes))
+                                 class_labels=self.class_labels, classes=self.classes, loss_f_type=self.loss_f_type))
         self.last_train_results = None
         self.chosen_counts = [0] * len(self.nets)
         self.heading_printed = False
