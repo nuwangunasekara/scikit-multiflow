@@ -70,7 +70,6 @@ class ANN:
     def __init__(self,
                  learning_rate=0.03,
                  network_layers=default_network_layers,
-                 class_labels=['0','1'],  # {'up':0,'down':1}
                  classes: tuple = None,  # classes=('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
                  use_cpu=True,
                  process_as_a_batch=False,
@@ -82,7 +81,6 @@ class ANN:
         # configuration variables (which has the same name as init parameters)
         self.learning_rate = learning_rate
         self.network_layers = copy.deepcopy(network_layers)
-        self.class_labels = class_labels
         self.classes = ('0', '1') if classes is None else classes
         self.use_cpu = use_cpu
         self.process_as_a_batch = process_as_a_batch
@@ -116,8 +114,6 @@ class ANN:
         self.criterion = None
         self.loss = None
         self.device = None
-        self.class_to_label = {}
-        self.label_to_class = {}
         self.samples_seen = 0
         self.detected_warnings = 0
         self.correctly_predicted_count = 0
@@ -132,18 +128,12 @@ class ANN:
         self.criterion = None
         self.loss = None
         self.device = None
-        self.class_to_label = {}
-        self.label_to_class = {}
         self.samples_seen = 0
         self.detected_warnings = 0
         self.correctly_predicted_count = 0
         self.loss_f = None
 
         initialize_network = False
-
-        for i in range(len(self.class_labels)):
-            self.class_to_label.update({i: self.class_labels[i]})
-            self.label_to_class.update({self.class_labels[i]: i})
 
         if isinstance(self.network_layers, nn.Module):
             self.net = self.network_layers
@@ -335,7 +325,6 @@ net_config = [
 
 class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
     def __init__(self,
-                 class_labels=['0','1'],  # {'up':0,'down':1}
                  classes: tuple = None,  # classes=('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
                  use_cpu=True,
                  process_as_a_batch=False,
@@ -344,7 +333,6 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                  loss_f_type=LOSS_F_TYPE_NLLLoss):
         # configuration variables (which has the same name as init parameters)
         self.classes = ('0', '1') if classes is None else classes
-        self.class_labels = class_labels
         self.use_threads = use_threads
         self.stats_file_name = stats_file_name
         self.loss_f_type = loss_f_type
@@ -352,7 +340,6 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         super().__init__()
 
         # status variables
-        self.class_to_label = {}
         self.nets = []  # type: List[ANN]
         self.samples_seen = 0
         self.last_train_results = None
@@ -364,13 +351,9 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
 
     def init_values(self):
         # init status variables
-        self.class_to_label = {}
-        for i in range(len(self.class_labels)):
-            self.class_to_label.update({i: self.class_labels[i]})
-
         for i in range(len(net_config)):
             self.nets.append(ANN(learning_rate=net_config[i]['l_rate'], optimizer_type=net_config[i]['optimizer_type'],
-                                 class_labels=self.class_labels, classes=self.classes, loss_f_type=self.loss_f_type))
+                                 classes=self.classes, loss_f_type=self.loss_f_type))
         self.last_train_results = None
         self.chosen_counts = [0] * len(self.nets)
         self.heading_printed = False
