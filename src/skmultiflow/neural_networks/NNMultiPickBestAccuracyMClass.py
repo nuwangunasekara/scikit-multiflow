@@ -40,7 +40,7 @@ class PyNet(nn.Module):
                 linear.append(nn.Linear(nn_layers[0]['input_d'], nn_layers[l]['neurons']))
             elif l == len(nn_layers) - 1:  # last layer
                 linear.append(nn.Linear(nn_layers[l - 1]['neurons'], len(classes)))
-                # do not add sigmoid layer
+                # do not add activation function
                 continue
             else:  # all the other layers
                 linear.append(nn.Linear(nn_layers[l - 1]['neurons'], nn_layers[l]['neurons']))
@@ -56,9 +56,13 @@ class PyNet(nn.Module):
                 pass
         self.linear = nn.ModuleList(linear)
 
-    def forward(self, x):
+    def forward(self, X):
+        x = X
         for i, l in enumerate(self.linear):
-            x = self.f[i](l(x))
+            if i == len(self.linear) - 1:
+                x = l(x)
+            else:
+                x = self.f[i](l(x))
         return x
 
 
@@ -162,7 +166,6 @@ class ANN:
             self.device = torch.device("cpu")
         else:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        # print(self.device)
 
     def init_optimizer(self):
         if self.optimizer_type == OP_TYPE_ADAGRAD or self.optimizer_type == OP_TYPE_ADAGRAD_NC:
@@ -246,7 +249,7 @@ class ANN:
                 self.warning_detection_method.add_element(1 if predicted_matches_actual else 0)
 
             # pass the difference to the detector
-            # predicted_matches_actual = torch.abs(y-outputs).detach().numpy()[0]
+            # predicted_matches_actual = torch.abs(y - outputs).detach().numpy()[0]
             # self.drift_detection_method.add_element(predicted_matches_actual)
 
             # Check if the was a warning
@@ -264,14 +267,12 @@ class ANN:
                 self.init_optimizer()
 
     def partial_fit(self, X, r, c, y):
-        # r, c = get_dimensions(X)
         if self.net is None:
             self.network_layers[0]['input_d'] = c
             self.initialize_network(self.network_layers)
 
         if self.process_as_a_batch:
             self.samples_seen += r
-            # probas, y_hats are still tensors
             self.train_net(x=torch.from_numpy(X).float(), y=torch.from_numpy(np.array(y)).view(-1, 1).float())
         else:  # per instance processing (default behaviour)
             for i in range(r):
@@ -429,7 +430,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                 self.samples_seen,
                 self.nets[i].optimizer_type,
                 self.nets[i].learning_rate,
-                self.nets[i].correctly_predicted_count / self.nets[i].samples_seen * 100,
+                self.nets[i].correctly_predicted_count / self.nets[i].samples_seen * 100 if self.nets[i].samples_seen > 0 else 0,
                 self.chosen_counts[i]))
         print('\n')
 
@@ -443,5 +444,5 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                     self.samples_seen,
                     self.nets[i].optimizer_type,
                     self.nets[i].learning_rate,
-                    self.nets[i].correctly_predicted_count / self.nets[i].samples_seen * 100,
+                    self.nets[i].correctly_predicted_count / self.nets[i].samples_seen * 100 if self.nets[i].samples_seen > 0 else 0,
                     self.chosen_counts[i]), file=self.stats_file)
