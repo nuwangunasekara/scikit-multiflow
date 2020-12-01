@@ -42,7 +42,7 @@ class PyNet(nn.Module):
                 linear.append(nn.Linear(nn_layers[0]['input_d'], nn_layers[l]['neurons']))
             elif l == len(nn_layers) - 1:  # last layer
                 linear.append(nn.Linear(nn_layers[l - 1]['neurons'], len(classes)))
-                # do not add sigmoid layer
+                # do not add activation function
                 continue
             else:  # all the other layers
                 linear.append(nn.Linear(nn_layers[l - 1]['neurons'], nn_layers[l]['neurons']))
