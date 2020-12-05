@@ -29,6 +29,12 @@ OP_TYPE_ADAM_AMSG_NC = 'Adam-AMSG-NC'
 LOSS_F_TYPE_NLLLoss = 1
 LOSS_F_TYPE_MultiMarginLoss = 2
 
+LOSS_TRANSFORM_TYPE_NONE = 0
+LOSS_TRANSFORM_TYPE_MIN_MAX_NORMALIZE = 1
+LOSS_TRANSFORM_TYPE_TANH_SIGMOID = 2
+
+
+
 
 class PyNet(nn.Module):
     def __init__(self, nn_layers: list = None, classes: tuple = None):
@@ -72,18 +78,19 @@ class ANN:
     def __init__(self,
                  learning_rate=0.03,
                  network_layers=default_network_layers,
-                 classes: tuple = None,  # classes=('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+                 class_labels: tuple = None,  # classes=('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
                  use_cpu=True,
                  process_as_a_batch=False,
                  optimizer_type=OP_TYPE_SGD,
                  warning_detection_method: BaseDriftDetector = ADWIN(delta=1e-8, direction=ADWIN.DETECT_DOWN),
                  drift_detection_method: BaseDriftDetector = ADWIN(delta=1e-3, direction=ADWIN.DETECT_DOWN),
                  loss_f_type=LOSS_F_TYPE_NLLLoss,
-                 softmax_f=nn.LogSoftmax(dim=1)):
+                 softmax_f=nn.LogSoftmax(dim=1),
+                 loss_transform_type=LOSS_TRANSFORM_TYPE_TANH_SIGMOID):
         # configuration variables (which has the same name as init parameters)
         self.learning_rate = learning_rate
         self.network_layers = copy.deepcopy(network_layers)
-        self.classes = ('0', '1') if classes is None else classes
+        self.class_labels = ('0', '1') if class_labels is None else class_labels
         self.use_cpu = use_cpu
         self.process_as_a_batch = process_as_a_batch
         self.optimizer_type = optimizer_type
@@ -109,6 +116,7 @@ class ANN:
                 self.warning_detection_method = warning_detection_method
         self.loss_f_type = loss_f_type
         self.softMax_f = softmax_f
+        self.loss_transform_type = loss_transform_type
 
         # status variables
         self.net = None
@@ -118,8 +126,12 @@ class ANN:
         self.device = None
         self.samples_seen = 0
         self.detected_warnings = 0
-        self.accumulated_loss = 0
         self.loss_f = None
+        self.estimator: BaseDriftDetector = None
+        # To normalize the observed errors in the [0, 1] range
+        self.min_error = float('Inf')
+        self.max_error = float('-Inf')
+        self.class_label_index_map = {}
 
         self.init_values()
 
@@ -132,10 +144,18 @@ class ANN:
         self.device = None
         self.samples_seen = 0
         self.detected_warnings = 0
-        self.accumulated_loss = 0
         self.loss_f = None
+        self.estimator = ADWIN(delta=1e-3)
+        # To normalize the observed errors in the [0, 1] range
+        self.min_error = float('Inf')
+        self.max_error = float('-Inf')
+        self.class_label_index_map = {}
 
         initialize_network = False
+
+        for i, class_label in enumerate(self.class_labels):
+            self.class_label_index_map[class_label] = i
+
 
         if isinstance(self.network_layers, nn.Module):
             self.net = self.network_layers
@@ -152,7 +172,7 @@ class ANN:
             print('Unknown network type passed in, set the network type to default: {}'.format(self.network_layers))
 
         if initialize_network:
-            self.initialize_network(self.network_layers)
+            self.initialize_network()
 
         if self.use_cpu:
             self.device = torch.device("cpu")
@@ -197,8 +217,8 @@ class ANN:
               '{}\n'
               '======================================='.format(self))
 
-    def initialize_network(self, network_layers=None):
-        self.net = PyNet(network_layers, self.classes)
+    def initialize_network(self):
+        self.net = PyNet(self.network_layers, self.class_labels)
         self.initialize_net_para()
 
     def train_net(self, x, y):
@@ -221,14 +241,31 @@ class ANN:
         if self.learning_rate > 0.0:
             # print('here')
             # self.loss = self.criterion(outputs, y.reshape((-1,)).long())
-            # output = loss(m(inputd), target)
-            self.loss = self.loss_f(self.softMax_f(outputs), y.reshape((-1,)).long())
+            class_index = self.class_label_index_map[y.reshape((-1,)).item()]
+            self.loss = self.loss_f(self.softMax_f(outputs), torch.tensor([class_index]))
             self.loss.backward()
             self.optimizer.step()  # Does the update
-            self.accumulated_loss += self.loss.item()
+
+            if self.loss_transform_type == LOSS_TRANSFORM_TYPE_MIN_MAX_NORMALIZE:
+                # Incremental maintenance of the normalization ranges
+                normalized_loss = 0.0
+                if self.loss.item() < self.min_error:
+                    self.min_error = self.loss.item()
+                if self.loss.item() > self.max_error:
+                    self.max_error = self.loss.item()
+                if self.min_error != self.max_error:
+                    normalized_loss = (self.loss.item() - self.min_error) / (self.max_error - self.min_error)
+            elif self.loss_transform_type == LOSS_TRANSFORM_TYPE_TANH_SIGMOID:
+                normalized_loss = 1/(1 + np.exp(-np.tanh(self.loss.item())))
+            elif self.loss_transform_type == LOSS_TRANSFORM_TYPE_NONE:
+                normalized_loss = self.loss.item()
+
+            self.estimator.add_element(normalized_loss)
+            # print(normalized_loss, self.estimator.estimation)
+
         outputs = outputs.detach()
         _, predicted_idxs = torch.max(outputs, 1)
-        predicted_labels = self.classes[predicted_idxs]
+        predicted_labels = self.class_labels[predicted_idxs]
 
         if self.drift_detection_method is not None:
             # get predicted class and compare with actual class label
@@ -258,7 +295,7 @@ class ANN:
     def partial_fit(self, X, r, c, y):
         if self.net is None:
             self.network_layers[0]['input_d'] = c
-            self.initialize_network(self.network_layers)
+            self.initialize_network()
 
         if self.process_as_a_batch:
             self.samples_seen += r
@@ -277,7 +314,7 @@ class ANN:
     def predict_proba(self, X, r, c):
         if self.net is None:
             self.network_layers[0]['input_d'] = c
-            self.initialize_network(self.network_layers)
+            self.initialize_network()
 
         if self.process_as_a_batch:
             return self.net(torch.from_numpy(X).float()).detach().numpy()
@@ -329,12 +366,14 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                  process_as_a_batch=False,
                  use_threads=False,
                  stats_file_name=None,
-                 loss_f_type=LOSS_F_TYPE_NLLLoss):
+                 loss_f_type=LOSS_F_TYPE_NLLLoss,
+                 loss_transform_type=LOSS_TRANSFORM_TYPE_TANH_SIGMOID):
         # configuration variables (which has the same name as init parameters)
         self.classes = ('0', '1') if classes is None else classes
         self.use_threads = use_threads
         self.stats_file_name = stats_file_name
         self.loss_f_type = loss_f_type
+        self.loss_transform_type = loss_transform_type
 
         super().__init__()
 
@@ -351,8 +390,11 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
     def init_values(self):
         # init status variables
         for i in range(len(net_config)):
-            self.nets.append(ANN(learning_rate=net_config[i]['l_rate'], optimizer_type=net_config[i]['optimizer_type'],
-                                 classes=self.classes, loss_f_type=self.loss_f_type))
+            self.nets.append(ANN(learning_rate=net_config[i]['l_rate'],
+                                 optimizer_type=net_config[i]['optimizer_type'],
+                                 class_labels=self.classes,
+                                 loss_f_type=self.loss_f_type,
+                                 loss_transform_type=self.loss_transform_type))
         self.last_train_results = None
         self.chosen_counts = [0] * len(self.nets)
         self.heading_printed = False
@@ -383,7 +425,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         r, c = get_dimensions(X)
         accumulated_loss = [0] * len(self.nets)
         for i in range(len(self.nets)):
-            accumulated_loss[i] = self.nets[i].accumulated_loss
+            accumulated_loss[i] = self.nets[i].estimator.estimation
         current_best = np.argmin(accumulated_loss, axis=0)
         self.chosen_counts[current_best] += 1
         _, predicted_idx = torch.max(self.nets[current_best].predict_proba(X, r, c), 1)
@@ -410,7 +452,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                 self.samples_seen,
                 self.nets[i].optimizer_type,
                 self.nets[i].learning_rate,
-                self.nets[i].accumulated_loss,
+                self.nets[i].estimator.estimation,
                 self.chosen_counts[i]))
         print('\n')
 
@@ -424,5 +466,5 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                     self.samples_seen,
                     self.nets[i].optimizer_type,
                     self.nets[i].learning_rate,
-                    self.nets[i].accumulated_loss,
+                    self.nets[i].estimator.estimation,
                     self.chosen_counts[i]), file=self.stats_file)
