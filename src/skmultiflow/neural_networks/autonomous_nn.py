@@ -6,31 +6,33 @@ import os
 import random
 import copy
 import builtins
+import time
 import numpy as np
 import scipy.io
 import pandas as pd
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument("-i", "--input", type=str, help="input file or stream",
-                    default='/Users/ng98/Desktop/datasets/unziped/forExperiments/nomao_class_label_mapped.csv')
+parser.add_argument("-i", "--input", type=str, help="input file or stream", default='/Users/ng98/Desktop/datasets/unziped/forExperiments/nomao_class_label_mapped.csv')
 parser.add_argument("-o", "--output", type=str, help="output file", default='out.csv')
-parser.add_argument("-b", "--batchsize", type=int, help="Batch Size", default=500)
+parser.add_argument("-b", "--batchsize", type=int, help="Batch Size", default=200)
 args = parser.parse_args()
 if args.input is None:
     print('Input file or stream is not given')
     exit(1)
 
+# Write-Overwrites
+# file1 = open(args.output, "w", buffering=1024*512)  # write mode
+# file1.write("id,mean_acc_[M0],current_acc_[M0],mean_kappa_[M0],current_kappa_[M0],training_time_[M0],testing_time_[M0],total_running_time_[M0],model_size_[M0]\n")
 
 print(args.batchsize)
 
 if args.batchsize < 100:
     println = builtins.print
 
-
     def print(*args, **kwargs):
-        # builtins.print(*args, **kwargs)
-        pass
+            # builtins.print(*args, **kwargs)
+            pass
 
 
 # Notebook code-----------------------------------------------------------------------------------
@@ -92,19 +94,19 @@ class nn(object):
 
 
 class Parameter(object):
-    def __init__(self, nn, layer, K):
+    def __init__(self, nn,layer,K):
         self.nn = nn
         self.ev = {}
         self.size = layer
-        self.prune_list = 0
+        self.prune_list       = 0
         self.prune_list_index = []
-        self.ev[1] = {'layer': layer, 'kp': 0, 'kl': 0, 'miu_x_old': 0, 'var_x_old': 0, 'kl': 0, 'K': K, 'cr': 0,
-                      'node': {},
-                      'BIAS2': {}, 'VAR': {}, 'miu_NS_old': 0, 'var_NS_old': 0, 'miu_NHS_old': 0, 'var_NHS_old': 0,
-                      'miumin_NS': [], 'miumin_NHS': [], 'stdmin_NS': [], 'stdmin_NHS': []}
+        self.ev[1] = {'layer': layer, 'kp':0, 'kl':0 ,'miu_x_old':0, 'var_x_old':0, 'kl':0,'K':K, 'cr':0,'node':{},
+                     'BIAS2':{}, 'VAR':{}, 'miu_NS_old':0, 'var_NS_old':0, 'miu_NHS_old':0, 'var_NHS_old':0,
+                     'miumin_NS':[], 'miumin_NHS':[], 'stdmin_NS':[], 'stdmin_NHS':[]}
         self.Loss = {}
         self.cr = {}
         self.wl = {}
+
 
 
 class Performance(object):
@@ -112,9 +114,9 @@ class Performance(object):
         self.update_time = 0
         self.ev = {}
         self.test_time = 0
-        self.classification_time = 0
+        self.classification_time    = 0
         self.layer = 0
-        self.ev[1] = {'f_measure': 0, 'g_mean': 0, 'recall': 0, 'precision': 0}
+        self.ev[1] = {'f_measure': 0, 'g_mean':0, 'recall':0, 'precision':0}
         self.LayerWeight = 0
         self.meanode = []
         self.stdnode = []
@@ -161,7 +163,10 @@ def update_beta(x):
     #         return x
 
     for k, v in x.items():
-        result[k] = v / sum_val
+        if sum_val == 0:
+            result[k] = 0.0
+        else:
+            result[k] = v / sum_val
     return result
 
 
@@ -284,7 +289,7 @@ def netfeedforward(nn, x, y):
     return nn
 
 
-# net configuration while training
+#net configuration while training
 def netconfigtrain(layer):
     net = nn(layer)
     net.layer = layer
@@ -365,43 +370,43 @@ def netffsingle(nn, x, y):
     return nn
 
 
-# calculate backpropagation
+#calculate backpropagation
 def netbackpropagation(nn):
     n = nn.n
     d = {}
-    if (nn.output == 'sigm'):
+    if(nn.output == 'sigm'):
         d[n] = - nn.e[1] * (nn.a[n] * (1 - nn.a[n]))
-    elif (nn.output == 'linear' or nn.output == 'softmax'):
+    elif(nn.output == 'linear' or nn.output == 'softmax'):
         d[n] = -1 * nn.e[1]
-    for i in range(n - 1, 1, -1):
-        if (nn.activation_func == 'sigm'):
+    for i in range(n-1, 1, -1):
+        if(nn.activation_func == 'sigm'):
             d_act = nn.a[i] * (1 - nn.a[i])
-        elif (nn.activation_func == 'tanh_opt'):
-            d_act = 1.7159 * 2 / 3 * (1 - 1 / (1.7159 ** 2) * (nn.a[i] ** 2))
-        elif (nn.activation_func == 'relu'):
-            d_act = np.zeros((1, len(nn.a[i])))
+        elif(nn.activation_func == 'tanh_opt'):
+            d_act = 1.7159 * 2/3 * (1 - 1 / (1.7159**2) * (nn.a[i]**2))
+        elif(nn.activation_func == 'relu'):
+            d_act = np.zeros((1,len(nn.a[i])))
             for i in range(len(d_act)):
-                if (nn.a[i + 1] > 0):
+                if(nn.a[i + 1]>0):
                     d_act[i] = 0
-        if (i + 1 == n):
-            d[i] = (np.matmul(d[i + 1], nn.W[i]) * d_act)
+        if(i+1 == n):
+            d[i] = (np.matmul(d[i+1], nn.W[i]) * d_act)
         else:
-            d[i] = (np.matmul(d[i + 1][1:], nn.W[i]) * d_act)
+            d[i] = (np.matmul(d[i+1][1:], nn.W[i]) * d_act)
 
     for i in range(1, n):
-        if (i + 1 == n):
-            nn.dW[i] = np.matmul(d[i + 1].T, nn.a[i])
+        if(i+1 == n):
+            nn.dW[i] = np.matmul(d[i+1].T, nn.a[i])
         else:
-            nn.dW[i] = np.matmul(d[i + 1][:, 1:].T, nn.a[i])
+            nn.dW[i] = np.matmul(d[i+1][:,1:].T, nn.a[i])
     return nn
 
 
-# update the weight
+#update the weight
 def netupdate(nn):
     for i in range(1, nn.n):
         dW = nn.dW[i]
         dW = nn.learningRate * dW
-        if (nn.momentum > 0):
+        if(nn.momentum > 0):
             nn.vW[i] = nn.momentum * nn.vW[i] + dW
             dW = nn.vW[i]
         nn.W[i] = nn.W[i] - dW
@@ -886,7 +891,6 @@ def to_one_hot(x, nclass):
         y[i][x[i]] = 1
     return y
 
-
 # Notebook code-----------------------------------------------------------------------------------
 
 def pd_one_hot_encode(df, column_names, preserve_columns=False):
@@ -912,39 +916,95 @@ def pd_one_hot_encode(df, column_names, preserve_columns=False):
 # print(len(df.columns))
 # data = df.to_numpy()
 # data = np.genfromtxt('spam_corpus_class_map_random_labels_one_hot.csv', delimiter=',', skip_header=1)
-
-
+# t1 = time.time()
+# data_load_time = t1-t0
+# print('data_load_time={}s'.format(data_load_time))
 # exit(0)
 # data1 = scipy.io.loadmat('sea.mat')
 # data = data1.get('data')
 
 
+
+
 def test_ADL(data, n_feature):
+    t2 = time.time()
     (nData, n_column) = data.shape
     M = n_column - n_feature
-    preq_data = data[:, 0:n_feature]
-    preq_label = data[:, n_feature:]
+    preq_data = data[:,0:n_feature]
+    preq_label = data[:,n_feature:]
     chunk_size = args.batchsize
-    no_of_chunk = int(nData / chunk_size)
+    no_of_chunk = int(nData/chunk_size)
 
+    drift = {}
+    HL = {}
+    buffer_x = []
+    buffer_T = []
+    tTest = []
+    tTarget = []
+    act = []
+    out = []
+    #initiate model
+    K = 1 #initial node
+    network = nn([n_feature, K, M])
 
-    for count in range(0, no_of_chunk):
+    #initiate node evolving iterative parameters
+    layer = 1 #initial layer
+    parameter = Parameter(network, layer,K)
+    performance = Performance()
 
+    # initiate drift detection parameter
+    alpha_w = 0.0005
+    alpha_d = 0.0001
+    alpha   = 0.0001
 
-        # statistical measure
+    #initiate layer merging iterative parameters
+    covariance = np.zeros((1,1,2))
+    covariance_old             = covariance
+    threshold                  = 0.05
+
+    ClassificationRate = {}
+    for count in range(0,no_of_chunk):
+        # prepare data
+        n = count + 1
+        minibatch_data  = preq_data [(n-1)*chunk_size:n*chunk_size]
+        minibatch_label = preq_label[(n-1)*chunk_size:n*chunk_size]
+
+        # neural network testing
+        print('Chunk: {} of {}'.format(n, no_of_chunk))
+        print('Discriminative Testing: running ...')
+        parameter.nn.t = n
+        [parameter.nn] = nettestparallel(parameter.nn,minibatch_data,minibatch_label,parameter.ev)
+
+        #metrics calculation
+        parameter.Loss[n] = parameter.nn.L[parameter.nn.index]
+        if(n == 1):
+            tTest = parameter.nn.sigma.copy()
+            act = parameter.nn.act.copy()
+            out = parameter.nn.out.copy()
+            parameter.residual_error = np.append(out,parameter.nn.residual_error,axis=0)
+        else:
+            tTest = np.append(tTest,parameter.nn.sigma,axis=0)
+            act = np.append(act,parameter.nn.act,axis=0)
+            out = np.append(out,parameter.nn.out,axis=0)
+            parameter.residual_error = np.append(out,parameter.nn.residual_error,axis=0)
+        parameter.cr[n] = parameter.nn.cr
+        ClassificationRate[n] = np.array(list(parameter.cr.values())).mean()
+        print('Classification rate {}'.format(ClassificationRate[n]))
+        print('Discriminative Testing: ... finished')
+
+        #statistical measure
         performance.ev[n] = {}
-        [performance.ev[n]['f_measure'], performance.ev[n]['g_mean'], performance.ev[n]['recall'],
-         performance.ev[n]['precision']] = performance_summary(parameter.nn.act, parameter.nn.out, M)
-        # last chunk only for testing process
-        if (n == no_of_chunk):
+        [performance.ev[n]['f_measure'], performance.ev[n]['g_mean'] ,performance.ev[n]['recall'],performance.ev[n]['precision']] = performance_summary(parameter.nn.act, parameter.nn.out, M)
+        #last chunk only for testing process
+        if(n == no_of_chunk):
             print('=========Parallel Autonomous Deep Learning is finished=========')
             break
 
-        # Drift detection: output space
-        if (n > 1):
+        #Drift detection: output space
+        if(n>1):
             cuttingpoint = 0
             pp = minibatch_label.shape[0]
-            F_cut = np.zeros((pp, 1))
+            F_cut = np.zeros((pp,1))
             F_cut[parameter.nn.bad] = 1
             Fupper = np.max(F_cut)
             Flower = np.min(F_cut)
@@ -955,83 +1015,81 @@ def test_ADL(data, n_feature):
                 miu_G = np.mean(F_cut[0:cut])
                 Gupper = np.max(F_cut[0:cut])
                 Glower = np.min(F_cut[0:cut])
-                epsilon_G = (Gupper - Glower) * np.sqrt(((pp) / (2 * cut * (pp)) * np.log(1 / alpha)))
-                epsilon_F = (Fupper - Flower) * np.sqrt(((pp) / (2 * cut * (pp)) * np.log(1 / alpha)))
-                if ((epsilon_G + miu_G) >= (miu_F + epsilon_F) and cut < pp):
+                epsilon_G = (Gupper - Glower) * np.sqrt(((pp)/(2*cut*(pp)) * np.log(1/alpha)))
+                epsilon_F = (Fupper - Flower) * np.sqrt(((pp)/(2*cut*(pp)) * np.log(1/alpha)))
+                if ((epsilon_G + miu_G) >= (miu_F + epsilon_F) and cut<pp):
                     cuttingpoint = cut
                     miu_H = np.mean(F_cut[(cuttingpoint):])
-                    epsilon_D = (Fupper - Flower) * np.sqrt(
-                        ((pp - cuttingpoint) / (2 * cuttingpoint * (pp - cuttingpoint)) * np.log(1 / alpha_d)))
-                    epsilon_W = (Fupper - Flower) * np.sqrt(
-                        ((pp - cuttingpoint) / (2 * cuttingpoint * (pp - cuttingpoint)) * np.log(1 / alpha_w)))
+                    epsilon_D = (Fupper - Flower) * np.sqrt(((pp-cuttingpoint)/(2*cuttingpoint*(pp-cuttingpoint)) * np.log(1/alpha_d)))
+                    epsilon_W = (Fupper - Flower) * np.sqrt(((pp-cuttingpoint)/(2*cuttingpoint*(pp-cuttingpoint)) * np.log(1/alpha_w)))
                     break
-            if (cuttingpoint == 0):
+            if(cuttingpoint == 0):
                 miu_H = miu_F
-                epsilon_D = (Fupper - Flower) * np.sqrt(((pp) / (2 * cut * (pp)) * np.log(1 / alpha_d)))
-                epsilon_W = (Fupper - Flower) * np.sqrt(((pp) / (2 * cut * (pp)) * np.log(1 / alpha_w)))
+                epsilon_D = (Fupper - Flower) * np.sqrt(((pp)/(2*cut*(pp)) * np.log(1/alpha_d)))
+                epsilon_W = (Fupper - Flower) * np.sqrt(((pp)/(2*cut*(pp)) * np.log(1/alpha_w)))
 
-            # DRIFT STATUS
-            if ((np.abs(miu_G - miu_H)) > epsilon_D and cuttingpoint > 1):
+            #DRIFT STATUS
+            if((np.abs(miu_G - miu_H)) > epsilon_D and cuttingpoint>1):
                 st = 1
                 print('Drift state: DRIFT')
-                layer = layer + 1
+                layer = layer+1
                 parameter.nn.n = parameter.nn.n + 1
                 parameter.nn.hl = layer
                 print('The new Layer no {} is FORMED around chunk {}'.format(layer, n))
 
-                # Initiate NN weight parameters
-                ii = parameter.nn.W[layer - 1].shape[0]
-                parameter.nn.W[layer] = np.random.normal(0, np.sqrt(2 / (ii + 1)), size=(1, (ii + 1)))
-                parameter.nn.vW[layer] = np.zeros((1, ii + 1))
-                parameter.nn.dW[layer] = np.zeros((1, ii + 1))
+                #Initiate NN weight parameters
+                ii = parameter.nn.W[layer-1].shape[0]
+                parameter.nn.W[layer] = np.random.normal(0,np.sqrt(2/(ii+1)),size = (1, (ii+1)))
+                parameter.nn.vW[layer] = np.zeros((1,ii+1))
+                parameter.nn.dW[layer] = np.zeros((1,ii+1))
 
-                # Initiate new classifier weight
-                parameter.nn.Ws[layer] = np.random.normal(0, 1, size=(M, 2))
-                parameter.nn.vWs[layer] = np.zeros((M, 2))
-                parameter.nn.dWs[layer] = np.zeros((M, 2))
+                #Initiate new classifier weight
+                parameter.nn.Ws[layer]  = np.random.normal(0,1,size = (M,2))
+                parameter.nn.vWs[layer] = np.zeros((M,2))
+                parameter.nn.dWs[layer] = np.zeros((M,2))
 
-                # Initiate new voting weight
+                #Initiate new voting weight
                 parameter.nn.beta[layer] = 1
                 parameter.nn.betaOld[layer] = 1
                 parameter.nn.p[layer] = 1
 
                 # Initiate iterative parameters
                 parameter.ev[layer] = {}
-                parameter.ev[layer]['layer '] = layer
-                parameter.ev[layer]['kl'] = 0
-                parameter.ev[layer]['K'] = 1
-                parameter.ev[layer]['cr'] = 0
-                parameter.ev[layer]['node'] = {}
-                parameter.ev[layer]['miu_NS_old'] = 0
-                parameter.ev[layer]['var_NS_old'] = 0
+                parameter.ev[layer]['layer ']      = layer
+                parameter.ev[layer]['kl']          = 0
+                parameter.ev[layer]['K']           = 1
+                parameter.ev[layer]['cr']           = 0
+                parameter.ev[layer]['node']        = {}
+                parameter.ev[layer]['miu_NS_old']  = 0
+                parameter.ev[layer]['var_NS_old']  = 0
                 parameter.ev[layer]['miu_NHS_old'] = 0
                 parameter.ev[layer]['var_NHS_old'] = 0
-                parameter.ev[layer]['miumin_NS'] = []
-                parameter.ev[layer]['miumin_NHS'] = []
-                parameter.ev[layer]['stdmin_NS'] = []
-                parameter.ev[layer]['stdmin_NHS'] = []
-                parameter.ev[layer]['BIAS2'] = {}
-                parameter.ev[layer]['VAR'] = {}
+                parameter.ev[layer]['miumin_NS']   = []
+                parameter.ev[layer]['miumin_NHS']  = []
+                parameter.ev[layer]['stdmin_NS']   = []
+                parameter.ev[layer]['stdmin_NHS']  = []
+                parameter.ev[layer]['BIAS2']       = {}
+                parameter.ev[layer]['VAR']         = {}
 
-                # check buffer
-                if (len(buffer_x) == 0):
-                    h = parameter.nn.a[len(parameter.nn.a)][:, 1:]
+                #check buffer
+                if(len(buffer_x) == 0):
+                    h = parameter.nn.a[len(parameter.nn.a)][:,1:]
                     z = minibatch_label
                 else:
                     buffer_x = netffhl(parameter.nn, buffer_x)
-                    h = np.append(buffer_x[:, 1:], parameter.nn.a[len(parameter.nn.a)][:, 1:], axis=0)
-                    if (len(buffer_T) == 0):
-                        z = np.append(buffer_T, minibatch_label, axis=0)
+                    h = np.append(buffer_x[:,1:],parameter.nn.a[len(parameter.nn.a)][:,1:],axis=0)
+                    if(len(buffer_T) == 0):
+                        z = np.append(buffer_T,minibatch_label ,axis=0)
                     else:
                         z = minibatch_label
 
-                # Discriminative training for new layer
+                #Discriminative training for new layer
                 print('Discriminative Training for new layer: running ...')
-                parameter = nettrainsingle(parameter, h, z)
+                parameter = nettrainsingle(parameter,h,z)
                 print('Discriminative Training for new layer: ... finished')
                 buffer_x = []
                 buffer_T = []
-            elif ((np.abs(miu_G - miu_H)) >= epsilon_W and (np.abs(miu_G - miu_H)) < epsilon_D):
+            elif((np.abs(miu_G - miu_H)) >= epsilon_W and (np.abs(miu_G - miu_H)) < epsilon_D):
                 st = 2
                 print('Drift state: WARNING')
                 buffer_x = minibatch_data
@@ -1050,17 +1108,21 @@ def test_ADL(data, n_feature):
         HL[n] = checkbeta(parameter.nn.beta)
         parameter.wl[n] = parameter.nn.index
 
-        # Discriminative training for winning layer
-        if (st != 1):
+        #Discriminative training for winning layer
+        if(st != 1):
             print('Discriminative Training: running ...')
             parameter = nettrainparallel(parameter, minibatch_label)
             print('Discriminative Training: ... finished')
 
-        # Clear current data chunk
+        #Clear current data chunk
         parameter.nn.a = {}
         print('=========Hidden layer number {} was updated========='.format(parameter.nn.index))
 
-    return parameter, performance
+        t3 = time.time()
+        test_and_train_time = t3 - t2
+        # file1.write("id,mean_acc_[M0],current_acc_[M0],mean_kappa_[M0],current_kappa_[M0],training_time_[M0],testing_time_[M0],total_running_time_[M0],model_size_[M0]\n")
+        file1.write("{},{},{},0.0,0.0,0.0,0.0,{},0.0\n".format(n*chunk_size, ClassificationRate[n], parameter.nn.cr, test_and_train_time))
+    return parameter,performance
 
 
 # if __name__ == "__main__":
@@ -1118,11 +1180,11 @@ class AutonomousNN(BaseSKMObject, ClassifierMixin):
         return self
 
     def predict(self, X, y):
-        y_proba = self.predict_proba(X)
+        y_proba = self.predict_proba(X, y)
         y_pred = np.argmax(y_proba, axis=1)
         return vectorized_map_class_to_label(y_pred, class_to_label_map=self.class_to_label)
 
-    def predict_proba(self, X):
+    def predict_proba(self, X, y):
         proba = []
         r, c = get_dimensions(X)
         #
@@ -1138,32 +1200,38 @@ class AutonomousNN(BaseSKMObject, ClassifierMixin):
         #     proba.append([1 - self.layer[len(self.layer) - 1]['a'], self.layer[len(self.layer) - 1]['a']])
 
         # prepare data
-        n = count + 1
-        minibatch_data = preq_data[(n - 1) * chunk_size:n * chunk_size]
+        # n = count + 1
+        # minibatch_data = preq_data[(n - 1) * chunk_size:n * chunk_size]
         minibatch_data = X
-        minibatch_label = preq_label[(n - 1) * chunk_size:n * chunk_size]
+        # minibatch_label = preq_label[(n - 1) * chunk_size:n * chunk_size]
+        minibatch_label = to_one_hot(y, self.M)
 
         # neural network testing
-        print('Chunk: {} of {}'.format(n, no_of_chunk))
+        # print('Chunk: {} of {}'.format(n, no_of_chunk))
+        # print('Discriminative Testing: running ...')
+        # parameter.nn.t = n
+        self.parameter.nn.t += 1
+        n = self.parameter.nn.t
+        print('Chunk: {}'.format(self.parameter.nn.t))
         print('Discriminative Testing: running ...')
-        parameter.nn.t = n
-        [parameter.nn] = nettestparallel(parameter.nn, minibatch_data, minibatch_label, parameter.ev)
+
+        [self.parameter.nn] = nettestparallel(self.parameter.nn, minibatch_data, minibatch_label, self.parameter.ev)
 
         # metrics calculation
-        parameter.Loss[n] = parameter.nn.L[parameter.nn.index]
+        self.parameter.Loss[n] = self.parameter.nn.L[parameter.nn.index]
         if (n == 1):
-            tTest = parameter.nn.sigma.copy()
-            act = parameter.nn.act.copy()
-            out = parameter.nn.out.copy()
-            parameter.residual_error = np.append(out, parameter.nn.residual_error, axis=0)
+            self.tTest = self.parameter.nn.sigma.copy()
+            self.act = self.parameter.nn.act.copy()
+            self.out = self.parameter.nn.out.copy()
+            self.parameter.residual_error = np.append(out, self.parameter.nn.residual_error, axis=0)
         else:
-            tTest = np.append(tTest, parameter.nn.sigma, axis=0)
-            act = np.append(act, parameter.nn.act, axis=0)
-            out = np.append(out, parameter.nn.out, axis=0)
-            parameter.residual_error = np.append(out, parameter.nn.residual_error, axis=0)
-        parameter.cr[n] = parameter.nn.cr
-        ClassificationRate[n] = np.array(list(parameter.cr.values())).mean()
-        print('Classification rate {}'.format(ClassificationRate[n]))
+            self.tTest = np.append(self.tTest, self.parameter.nn.sigma, axis=0)
+            self.act = np.append(self.act, self.parameter.nn.act, axis=0)
+            self.out = np.append(self.out, self.parameter.nn.out, axis=0)
+            self.parameter.residual_error = np.append(self.out, self.parameter.nn.residual_error, axis=0)
+        self.parameter.cr[n] = self.parameter.nn.cr
+        self.ClassificationRate[n] = np.array(list(self.parameter.cr.values())).mean()
+        print('Classification rate {}'.format(self.ClassificationRate[n]))
         print('Discriminative Testing: ... finished')
 
         return np.asarray(proba)
