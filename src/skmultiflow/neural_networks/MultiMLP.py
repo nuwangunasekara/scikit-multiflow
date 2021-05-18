@@ -74,21 +74,6 @@ class PyNet(nn.Module):
         return x
 
 
-# class Normalize:
-#
-#     def __init__(self):
-#         pass
-#
-#     def getFeatureValuesArraySize(inst, useOneHotEncoding):
-#         totalOneHotEncodedSize = 0
-#         totalOneHotEncodedInstances = 0
-#         for i in range(inst.numInputAttributes()):
-#             if useOneHotEncoding and inst.attribute(i).isNominal() and (inst.attribute(i).numValues() > 2):
-#                 totalOneHotEncodedSize += inst.attribute(i).numValues()
-#                 totalOneHotEncodedInstances += 1
-#         return inst.numInputAttributes() + totalOneHotEncodedSize - totalOneHotEncodedInstances
-
-
 class ANN:
     def __init__(self,
                  learning_rate=0.03,
@@ -98,8 +83,9 @@ class ANN:
                  use_cpu=True,
                  process_as_a_batch=False,
                  optimizer_type=OP_TYPE_SGD,
-                 loss_f=nn.NLLLoss(),
-                 adwin_delta=1e-3):
+                 loss_f=nn.CrossEntropyLoss(),
+                 adwin_delta=1e-3,
+                 back_prop_skip_loss_threshold=0.6):
         # configuration variables (which has the same name as init parameters)
         self.model_name = None
         self.learning_rate = learning_rate
@@ -110,7 +96,7 @@ class ANN:
         self.optimizer_type = optimizer_type
         self.loss_f = loss_f
         self.adwin_delta = adwin_delta
-        self.soft_max_f = nn.LogSoftmax(dim=1)
+        self.back_prop_skip_loss_threshold = back_prop_skip_loss_threshold
 
         # status variables
         self.net = None
@@ -119,8 +105,11 @@ class ANN:
         self.loss = None
         self.device = None
         self.samples_seen = 0
+        self.trained_count = 0
+        self.chosen_counts = 0
         self.estimator: BaseDriftDetector = None
         self.class_label_index_map = {}
+        self.accumulated_loss = 0
 
         self.init_values()
 
@@ -147,10 +136,11 @@ class ANN:
                 print('Unknown hidden layer format is passed in: {}'.format(self.hidden_layers))
                 print('Expected format :{}'.format(default_hidden_layers))
                 exit(1)
-        self.model_name = '{}_{}_{}_{}'.format(math.log(self.hidden_layers[0]['neurons'], 2) if self.hidden_layers[0]['neurons'] else 'NA',
-                                               self.optimizer_type,
-                                               self.learning_rate,
-                                               self.adwin_delta)
+        self.model_name = 'L1_L1n{}_{}_{:05f}_{}'.format(
+            math.log(self.hidden_layers[0]['neurons'], 2) // 1 if self.hidden_layers[0]['neurons'] else 'NA',
+            self.optimizer_type,
+            self.learning_rate,
+            self.adwin_delta)
 
         if self.use_cpu:
             self.device = torch.device("cpu")
@@ -202,20 +192,21 @@ class ANN:
         outputs = self.net(x)
 
         # backward propagation
-        # print(self.learning_rate)
         # print(self.net.linear[0].weight.data)
-        # if self.learning_rate > 0.0:
-        # print('here')
-        # self.loss = self.criterion(outputs, y.reshape((-1,)).long())
         class_index = self.class_label_index_map[y.reshape((-1,)).item()]
-
-        self.loss = self.loss_f(self.soft_max_f(outputs), torch.tensor([class_index]))
-        if self.loss.item() > 0.6:
+        # self.loss = self.criterion(outputs, y.reshape((-1,)).long())
+        self.loss = self.loss_f(outputs, torch.tensor([class_index]))
+        if self.loss.item() > self.back_prop_skip_loss_threshold:
             self.loss.backward()
             self.optimizer.step()  # Does the update
+            self.trained_count += 1
 
         self.estimator.add_element(self.loss.item())
-        # print(normalized_loss, self.estimator.estimation)
+        self.accumulated_loss += self.loss.item()
+
+        # if self.estimator.detected_change():
+        #     print('drift detected by {}'.format(self.model_name))
+        #     pass
 
     def partial_fit(self, X, r, c, y):
         if self.net is None:
@@ -240,14 +231,14 @@ class ANN:
             self.initialize_network(input_dimentions=c)
 
         if self.process_as_a_batch:
-            return self.soft_max_f(self.net(torch.from_numpy(X).float())).detach().numpy()
+            return self.net(torch.from_numpy(X).float()).detach().numpy()
         else:  # per instance processing (default behaviour)
             probas = None
             for i in range(r):
                 x = torch.from_numpy(X[i])
                 x = x.view(1, -1).float()
                 x.unsqueeze(0)
-                instance_class_probas = self.soft_max_f(self.net(x)).detach()
+                instance_class_probas = self.net(x).detach()
                 if r == 1:
                     return instance_class_probas.reshape((1, -1))
                 elif i == 0:
@@ -263,6 +254,7 @@ class ANN:
 
     def get_loss_estimation(self):
         return self.estimator.estimation
+        # return self.accumulated_loss/self.samples_seen if self.samples_seen != 0 else 0.0
 
     def __str__(self):
         return str(self.__class__) + ": " + str(self.__dict__)
@@ -281,8 +273,9 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                  use_threads=False,
                  stats_file=sys.stdout,
                  number_of_mlps_to_train=10,
-                 number_of_instances_to_train_using_all_mlps_at_start=500,
+                 number_of_instances_to_train_using_all_mlps_at_start=1000,
                  adwin_delta=1e-3,
+                 back_prop_skip_loss_threshold=0.6,
                  stats_print_frequency=0):
         # configuration variables (which has the same name as init parameters)
         self.classes = ('0', '1') if classes is None else classes
@@ -292,14 +285,14 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         self.number_of_instances_to_train_using_all_mlps_at_start = number_of_instances_to_train_using_all_mlps_at_start
         self.adwin_delta = adwin_delta
         self.stats_print_frequency = stats_print_frequency
+        self.back_prop_skip_loss_threshold = back_prop_skip_loss_threshold
 
         super().__init__()
 
         # status variables
         self.nets = []  # type: List[ANN]
-        self.samples_seen = 0
-        self.chosen_counts = []
         self.heading_printed = False
+        self.samples_seen = 0
 
         self.init_values()
 
@@ -315,9 +308,9 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
                             learning_rate=5 / (10 ** lr_denominator_in_log10),
                             optimizer_type=optimizer_type,
                             adwin_delta=self.adwin_delta,
+                            back_prop_skip_loss_threshold=self.back_prop_skip_loss_threshold,
                             class_labels=self.classes))
 
-        self.chosen_counts = [0] * len(self.nets)
         self.heading_printed = False
         self.stats_file = sys.stdout if self.stats_file is sys.stdout else open(self.stats_file, 'w')
 
@@ -362,8 +355,8 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         chosen_index = 0
         min_estimation = sys.float_info.max
         for i in range(len(self.nets)):
-            if self.nets[i].get_loss_estimation() < min_estimation:
-                min_estimation = self.nets[i].get_loss_estimation()
+            if round(self.nets[i].get_loss_estimation(), 2) < min_estimation:
+                min_estimation = round(self.nets[i].get_loss_estimation(), 2)
                 chosen_index = i
         return chosen_index
 
@@ -371,7 +364,7 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
         r, c = get_dimensions(X)
         self.samples_seen += r
         current_best = self.get_chosen_index()
-        self.chosen_counts[current_best] += 1
+        self.nets[current_best].chosen_counts += 1
         _, predicted_idx = torch.max(self.nets[current_best].predict_proba(X, r, c), 1)
         self.print_stats()
         return [self.classes[predicted_idx.item()]]
@@ -394,15 +387,23 @@ class DeepNNPytorch(BaseSKMObject, ClassifierMixin):
 
     def print_stats(self, stream_ended=False):
         if self.samples_seen > 0 and (self.stats_print_frequency != 0 or stream_ended) and self.samples_seen % (
-        self.stats_print_frequency if self.stats_print_frequency != 0 else self.samples_seen) == 0:
+                self.stats_print_frequency if self.stats_print_frequency != 0 else self.samples_seen) == 0:
             if not self.heading_printed:
-                print('id,optimizer_type_learning_rate_delta,samples_seen,accumulated_loss,chosen_counts',
+                print('id,'
+                      'samples_seen,'
+                      'trained_count,'
+                      'optimizer_type_learning_rate_delta,'
+                      'avg_loss,'
+                      'estimated_loss,'
+                      'chosen_counts',
                       file=self.stats_file)
                 self.heading_printed = True
             for i in range(len(self.nets)):
-                print('{},{},{},{},{}'.format(
+                print('{},{},{},{},{},{},{}'.format(
                     self.samples_seen,
-                    self.nets[i].model_name,
                     self.nets[i].samples_seen,
-                    self.nets[i].get_loss_estimation(),
-                    self.chosen_counts[i]), file=self.stats_file)
+                    self.nets[i].trained_count,
+                    self.nets[i].model_name,
+                    self.nets[i].accumulated_loss/self.nets[i].samples_seen,
+                    self.nets[i].estimator.estimation,
+                    self.nets[i].chosen_counts), file=self.stats_file)
